@@ -36,7 +36,7 @@ retrieved_data/
 *.csv
 *.json
 *.sqlite3
-
+data_preprocess/
 # IDEs and Editors
 .vscode/
 .idea/
