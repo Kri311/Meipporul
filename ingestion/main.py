@@ -13,7 +13,7 @@ celery_app = Celery(
     "veritas_worker",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["tasks.fetch_feed"] # Register our tasks module
+    include=["tasks.fetch_feed", "tasks.embeddings"] # Register our tasks module
 )
 
 # Celery Configuration
@@ -33,6 +33,10 @@ celery_app.conf.beat_schedule = {
     "fetch-all-rss-feeds-every-5-mins": {
         "task": "tasks.fetch_feed.dispatch_all_feeds",
         "schedule": crontab(minute="*/5"),
+    },
+    "generate-embeddings-every-2-mins": {
+        "task": "tasks.embeddings.generate_embeddings_batch",
+        "schedule": crontab(minute="*/2"),
     },
 }
 
