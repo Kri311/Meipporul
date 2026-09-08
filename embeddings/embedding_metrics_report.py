@@ -65,10 +65,10 @@ OUTLET_ORIENTATION = {
 
 def load_articles(csv_path: str, sample_size: int = None):
     """Load articles from raw_processed.csv with language and orientation labels."""
-    print(f"\n📂 Loading articles from {csv_path}...")
+    print(f"\nLoading articles from {csv_path}...")
 
     if not os.path.exists(csv_path):
-        print(f"❌ File not found: {csv_path}")
+        print(f"File not found: {csv_path}")
         sys.exit(1)
 
     articles = []
@@ -106,9 +106,9 @@ def generate_embeddings(articles: list, use_gpu: bool = True):
 
     device = "cuda" if (use_gpu and torch.cuda.is_available()) else "cpu"
     if use_gpu and not torch.cuda.is_available():
-        print("⚠️  GPU requested but not available. Falling back to CPU.")
+        print(" GPU requested but not available. Falling back to CPU.")
 
-    print(f"\n🔧 Loading model: {MODEL_NAME} on {device.upper()}")
+    print(f"\nLoading model: {MODEL_NAME} on {device.upper()}")
     load_start = time.time()
     model = SentenceTransformer(MODEL_NAME, device=device)
     load_time = time.time() - load_start
@@ -143,7 +143,7 @@ def generate_embeddings(articles: list, use_gpu: bool = True):
     encode_time = time.time() - encode_start
     speed = len(texts) / encode_time
 
-    print(f"✅ Generated {len(embeddings)} embeddings in {encode_time:.2f}s "
+    print(f"Generated {len(embeddings)} embeddings in {encode_time:.2f}s "
           f"({speed:.1f} articles/sec)")
 
     del model
@@ -463,7 +463,7 @@ def save_classification_csv(lang_metrics: dict, orient_metrics: dict, output_pat
         writer.writeheader()
         writer.writerows(rows)
 
-    print(f"\n📊 Classification metrics saved to: {output_path}")
+    print(f"\nClassification metrics saved to: {output_path}")
 
 
 def run_report(csv_path: str, sample_size: int = None, use_gpu: bool = True, output_dir: str = None):
@@ -479,19 +479,19 @@ def run_report(csv_path: str, sample_size: int = None, use_gpu: bool = True, out
     embeddings, encode_time, speed = generate_embeddings(articles, use_gpu=use_gpu)
 
     # 3. Language classification (Tamil vs English)
-    print("\n🔬 Running Language Classification (KNN, k=5, 5-fold CV)...")
+    print("\nRunning Language Classification (KNN, k=5, 5-fold CV)...")
     lang_labels = [a["language"] for a in articles]
     lang_true, lang_pred = knn_classify(embeddings, lang_labels, k=5, n_folds=5)
     lang_metrics = compute_classification_metrics(lang_true, lang_pred, "Language")
 
     # 4. Orientation classification (IND / CON / DRV / MIXED)
-    print("🔬 Running Orientation Bucket Classification (KNN, k=5, 5-fold CV)...")
+    print("Running Orientation Bucket Classification (KNN, k=5, 5-fold CV)...")
     orient_labels = [a["orientation_bucket"] for a in articles]
     orient_true, orient_pred = knn_classify(embeddings, orient_labels, k=5, n_folds=5)
     orient_metrics = compute_classification_metrics(orient_true, orient_pred, "Orientation")
 
     # 5. Cross-lingual embedding quality metrics
-    print("🔬 Computing Cross-Lingual Embedding Quality Metrics...")
+    print("Computing Cross-Lingual Embedding Quality Metrics...")
     cross_metrics = compute_cross_lingual_metrics(embeddings, articles)
 
     # 6. Format and save report
@@ -507,13 +507,13 @@ def run_report(csv_path: str, sample_size: int = None, use_gpu: bool = True, out
     report_path = os.path.join(output_dir, "metrics_report.txt")
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(report_text)
-    print(f"\n📄 Full report saved to: {report_path}")
+    print(f"\nFull report saved to: {report_path}")
 
     # Save metrics CSV
     csv_output = os.path.join(output_dir, "classification_metrics.csv")
     save_classification_csv(lang_metrics, orient_metrics, csv_output)
 
-    print("\n✅ EMBEDDING METRICS REPORT COMPLETE")
+    print("\nEMBEDDING METRICS REPORT COMPLETE")
 
 
 # ── CLI Entry Point ──
