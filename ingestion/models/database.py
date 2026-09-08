@@ -96,8 +96,8 @@ class Article(Base):
     extraction_quality = Column(Float, nullable=True)
     processing_status = Column(String, default="pending") # pending, extracted, embedded, failed
     
-    # Vector Embedding using pgvector (384 dimensions for intfloat/multilingual-e5-small)
-    embedding = Column(Vector(384), nullable=True)
+    # Vector Embedding using pgvector (768 dimensions for Tamil-ai/tamil-embed-base)
+    embedding = Column(Vector(768), nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
