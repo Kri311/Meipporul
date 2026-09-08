@@ -8,7 +8,7 @@
 >
 > **Last consolidated:** 2026-09-02 IST
 >
-> **Primary implementation constraint:** Local-first, Dockerized, reproducible, observable, and small enough to develop on a local workstation.
+> **Primary implementation constraint:** Local-first, Bare-metal, reproducible, observable, and small enough to develop on a local workstation.
 >
 > **Important product principle:** Veritas Lens does **not** decide what political side is "correct" and must not present an automatically inferred political orientation as objective fact. Outlet bias/orientation labels come from documented external sources or an explicitly maintained project label registry. Article-level analysis describes measurable framing differences, omissions, sourcing patterns, entities, claims, and coverage distribution rather than declaring an article "propaganda" or "fabricated" without evidence.
 
