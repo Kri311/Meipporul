@@ -10,8 +10,8 @@ Model: Tamil-ai/tamil-embed-base (768 dimensions)
 - No prefix required (unlike E5 models)
 """
 
-from main import celery_app
-from models.database import SessionLocal, Article
+from ingestion.main import celery_app
+from ingestion.models.database import SessionLocal, Article
 from sentence_transformers import SentenceTransformer
 
 # Load model lazily at module level so it's loaded once per worker process

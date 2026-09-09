@@ -5,7 +5,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from pgvector.sqlalchemy import Vector
 
 # Get database URL from environment, default to local if not set
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://veritas_admin:veritas_secret_password@localhost:5432/veritas_lens")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://veritas_admin:veritas@localhost:5432/veritas_lens")
 
 # Create SQLAlchemy Engine and Session
 engine = create_engine(DATABASE_URL, echo=False)

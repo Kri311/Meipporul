@@ -4,7 +4,7 @@ from celery import Celery
 from celery.schedules import crontab
 from celery.signals import worker_process_init
 
-from models.database import SessionLocal, Outlet, RssFeed, init_db, engine
+from ingestion.models.database import SessionLocal, Outlet, RssFeed, init_db, engine
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
@@ -13,7 +13,7 @@ celery_app = Celery(
     "veritas_worker",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["tasks.fetch_feed", "tasks.embeddings"] # Register our tasks module
+    include=["ingestion.tasks.fetch_feed", "ingestion.tasks.embeddings"] # Register our tasks module
 )
 
 # Celery Configuration
@@ -31,11 +31,11 @@ celery_app.conf.update(
 # Set up periodic tasks (Celery Beat)
 celery_app.conf.beat_schedule = {
     "fetch-all-rss-feeds-every-5-mins": {
-        "task": "tasks.fetch_feed.dispatch_all_feeds",
-        "schedule": crontab(minute="*/5"),
+    "task": "ingestion.tasks.fetch_feed.dispatch_all_feeds",
+    "schedule": crontab(minute="*/5"),
     },
     "generate-embeddings-every-2-mins": {
-        "task": "tasks.embeddings.generate_embeddings_batch",
+        "task": "ingestion.tasks.embeddings.generate_embeddings_batch",
         "schedule": crontab(minute="*/2"),
     },
 }
