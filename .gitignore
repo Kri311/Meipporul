@@ -7,6 +7,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# celery logs
+celerybeat-schedule.bak
+celerybeat-schedule.dat
+celerybeat-schedule.dir
 # Python
 __pycache__/
 *.py[cod]
