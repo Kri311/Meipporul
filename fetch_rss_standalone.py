@@ -27,6 +27,7 @@ import argparse
 import csv
 import hashlib
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -44,6 +45,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from ingestion.tasks.text_cleaning import (
     clean_html, deep_clean_text, detect_language, get_canonical_url,
     SKIP_KEYWORDS, FESTIVAL_KEYWORDS, BREAKING_NEWS_KEYWORDS,
+    classify_topic, apply_outlet_cleaners
 )
 
 # ─── Constants ───
@@ -51,7 +53,7 @@ CSV_FIELDNAMES = [
     "content_hash", "guid", "outlet_slug", "title", "description",
     "author", "published_at", "language", "article_length",
     "data_fetch_via", "canonical_url", "extraction_method",
-    "extraction_quality", "processing_status", "raw_text", "clean_text"
+    "extraction_quality", "processing_status", "raw_text", "clean_text", "topic"
 ]
 
 CSV_PATH = os.path.join(PROJECT_ROOT, "data", "raw_processed.csv")
@@ -147,12 +149,18 @@ def extract_article_text(entry, canonical_url):
     if len(clean_rss_text) < 500:
         try:
             resp = requests.get(canonical_url, headers=HTTP_HEADERS, timeout=10)
-            downloaded = resp.text if resp.status_code == 200 else None
+            # Use content (bytes) to let Trafilatura handle encoding properly
+            downloaded = resp.content if resp.status_code == 200 else None
         except Exception:
             downloaded = None
 
         if downloaded:
             extracted_text = trafilatura.extract(downloaded, favor_recall=True)
+            
+            # If RSS text was practically empty, populate raw_text with the trafilatura extraction so it's not empty
+            if len(clean_rss_text) < 50 and extracted_text:
+                rss_content_html = extracted_text
+                
             if extracted_text and len(extracted_text) > len(clean_rss_text):
                 final_text = deep_clean_text(extracted_text)
                 extraction_method = "trafilatura"
@@ -225,6 +233,11 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
                 filtered_quality += 1
                 continue
 
+            # Extra News18 filters
+            if outlet_slug in ['news18_india', 'news18_tamil_nadu'] and any(kw in url_lower for kw in ['/photogallery/', '/explanations/', 'job', 'recruitment']):
+                filtered_quality += 1
+                continue
+
             # Normalization
             original_url = getattr(entry, "link", "")
             canonical_url = get_canonical_url(original_url)
@@ -256,6 +269,50 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
 
             # Detect language and article length
             detected_lang = detect_language(final_text)
+            
+            # Apply per-outlet cleaners and classify topic
+            clean_title, final_text = apply_outlet_cleaners(clean_title, final_text, outlet_slug, canonical_url)
+            
+            # Remove title duplication from body using a smarter line-by-line check BEFORE collapsing newlines
+            import re
+            
+            def normalize_str(s):
+                from ingestion.tasks.text_cleaning import normalize_political_parties
+                s = normalize_political_parties(s)
+                return re.sub(r'[^a-zA-Z0-9஀-௿]', '', s).lower()
+                
+            norm_title = normalize_str(clean_title)
+            
+            lines = final_text.split('\n')
+            while lines:
+                first_line = re.sub(r'^[\s\-\|:]+', '', lines[0]).strip()
+                norm_first = normalize_str(first_line)
+                
+                # Check if first line is heavily overlapping with title
+                if norm_first and (norm_first in norm_title or norm_title in norm_first or (len(norm_first) >= 15 and norm_first[:15] == norm_title[:15])):
+                    lines.pop(0)
+                else:
+                    break
+                    
+            final_text = '\n'.join(lines).strip()
+
+            # Remove any internal newlines in the body so it's a single continuous block
+            # Convert newlines (and any following whitespaces) into a single whitespace
+            final_text = re.sub(r'\n+\s*', ' ', final_text).strip()
+            
+            # STANDARD: Ensure content explicitly begins with the Title followed by the Body
+            # The user requested "newline follwed by a whitespace should be defined" in contents,
+            # so we ensure the gap between title and body is exact.
+            final_text = f"{clean_title}\n\n{final_text}"
+            
+            topic = classify_topic(clean_title, final_text, outlet_slug)
+            
+            # Strictly filter out entertainment/gossip/festival noise by enforcing topic rules for Tamil
+            # "political, world news, important ones, govt related, etc"
+            # If the user wants to aggressively drop non-news, we drop topic 'general' or 'sports' if it's too noisy,
+            # but since we already have SKIP_KEYWORDS, the topic classifier adds safety.
+
+            
             word_count = len(final_text.split())
             if word_count < 250:
                 article_length_cat = "short"
@@ -281,6 +338,7 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
                 "processing_status": "eligible",
                 "raw_text": rss_content_html,
                 "clean_text": final_text,
+                "topic": topic,
             }
 
             new_articles.append(article_row)
@@ -325,7 +383,7 @@ def run_fetch_cycle(args, existing_guids, content_hashes, existing_urls, sources
     # Write new articles to CSV
     if new_articles:
         file_exists = os.path.exists(CSV_PATH)
-        with open(CSV_PATH, "a", newline="", encoding="utf-8") as csvfile:
+        with open(CSV_PATH, "a", newline="", encoding="utf-8-sig") as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=CSV_FIELDNAMES)
             if not file_exists:
                 writer.writeheader()

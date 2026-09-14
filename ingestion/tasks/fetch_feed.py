@@ -16,6 +16,7 @@ from ingestion.models.database import SessionLocal, RssFeed, FeedRun, Article
 from ingestion.tasks.text_cleaning import (
     clean_html, deep_clean_text, detect_language, get_canonical_url,
     SKIP_KEYWORDS, FESTIVAL_KEYWORDS, BREAKING_NEWS_KEYWORDS,
+    classify_topic, apply_outlet_cleaners
 )
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
@@ -72,6 +73,11 @@ def process_single_feed(self, feed_id: int):
                 feed_run.entries_failed += 1
                 continue
                 
+            # Extra News18 filters
+            if outlet_slug in ['news18_india', 'news18_tamil_nadu'] and any(kw in url_lower for kw in ['/photogallery/', '/explanations/', 'job', 'recruitment']):
+                feed_run.entries_failed += 1
+                continue
+                
             # Allow festival news ONLY if it's breaking news
             if not is_breaking and any(keyword in title_lower or keyword in url_lower for keyword in FESTIVAL_KEYWORDS):
                 feed_run.entries_failed += 1
@@ -120,13 +126,17 @@ def process_single_feed(self, feed_id: int):
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
                     }
                     resp = requests.get(canonical_url, headers=headers, timeout=10)
-                    downloaded = resp.text if resp.status_code == 200 else None
+                    downloaded = resp.content if resp.status_code == 200 else None
                 except Exception:
                     downloaded = None
 
                 if downloaded:
                     # Extract main article body (removes headers, footers, sidebars)
                     extracted_text = trafilatura.extract(downloaded, favor_recall=True)
+                    
+                    if len(clean_rss_text) < 50 and extracted_text:
+                        rss_content_html = extracted_text
+                        
                     if extracted_text and len(extracted_text) > len(clean_rss_text):
                         final_text = deep_clean_text(extracted_text)
                         extraction_method = "trafilatura"
@@ -148,6 +158,41 @@ def process_single_feed(self, feed_id: int):
             # Auto-detect language from actual content (unified timeline)
             detected_lang = detect_language(final_text)
             
+            # Apply per-outlet cleaners and classify topic
+            title_clean, final_text = apply_outlet_cleaners(clean_html(title), final_text, outlet_slug, canonical_url)
+            
+            # Remove title duplication from body using a smarter line-by-line check BEFORE collapsing newlines
+            import re
+            
+            def normalize_str(s):
+                from ingestion.tasks.text_cleaning import normalize_political_parties
+                s = normalize_political_parties(s)
+                return re.sub(r'[^a-zA-Z0-9஀-௿]', '', s).lower()
+                
+            norm_title = normalize_str(title_clean)
+            
+            lines = final_text.split('\n')
+            while lines:
+                first_line = re.sub(r'^[\s\-\|:]+', '', lines[0]).strip()
+                norm_first = normalize_str(first_line)
+                
+                # Check if first line is heavily overlapping with title
+                if norm_first and (norm_first in norm_title or norm_title in norm_first or (len(norm_first) >= 15 and norm_first[:15] == norm_title[:15])):
+                    lines.pop(0)
+                else:
+                    break
+                    
+            final_text = '\n'.join(lines).strip()
+
+            # Remove any internal newlines in the body so it's a single continuous block
+            # Convert newlines (and any following whitespaces) into a single whitespace
+            final_text = re.sub(r'\n+\s*', ' ', final_text).strip()
+
+            # STANDARD: Ensure content explicitly begins with the Title followed by the Body
+            final_text = f"{title_clean}\n\n{final_text}"
+            
+            topic = classify_topic(title_clean, final_text, outlet_slug)
+            
             # Categorize article length for summarizer models
             word_count = len(final_text.split())
             if word_count < 250:
@@ -165,7 +210,7 @@ def process_single_feed(self, feed_id: int):
                 guid=guid,
                 canonical_url=canonical_url,
                 original_url=original_url,
-                title=clean_html(title),
+                title=title_clean,
                 description=clean_html(getattr(entry, 'description', '')),
                 author=getattr(entry, 'author', ''),
                 published_at=pub_date,
@@ -196,8 +241,8 @@ def process_single_feed(self, feed_id: int):
             csv_path = os.path.join(csv_dir, "raw_processed.csv")
             
             file_exists = os.path.exists(csv_path)
-            with open(csv_path, "a", newline="", encoding="utf-8") as csvfile:
-                fieldnames = ["content_hash", "guid", "outlet_slug", "title", "description", "author", "published_at", "language", "article_length", "data_fetch_via", "canonical_url", "extraction_method", "extraction_quality", "processing_status", "raw_text", "clean_text"]
+            with open(csv_path, "a", newline="", encoding="utf-8-sig") as csvfile:
+                fieldnames = ["content_hash", "guid", "outlet_slug", "title", "description", "author", "published_at", "language", "article_length", "data_fetch_via", "canonical_url", "extraction_method", "extraction_quality", "processing_status", "raw_text", "clean_text", "topic"]
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 if not file_exists:
                     writer.writeheader()
@@ -217,7 +262,8 @@ def process_single_feed(self, feed_id: int):
                     "extraction_quality": extraction_quality,
                     "processing_status": "eligible",
                     "raw_text": rss_content_html,
-                    "clean_text": final_text
+                    "clean_text": final_text,
+                    "topic": topic
                 })
             # -------------------
 

@@ -79,6 +79,21 @@ JUNK_PATTERNS = [
     r"(?i)^\s*advertisement\s*$",
     r"(?i)^\s*sponsored\s*$",
     r"(?i)^\s*promoted\s*content\s*$",
+    r"(?i)Story continues below this ad",
+    r"(?i)Loading recommendations",
+    r"(?i)pic\.twitter\.com/\w+",
+    r"(?i)IE Online Media Services PVT LTD",
+    r"(?i)^PHOTO\s*:.*",
+    r"- இது, க்காக கலெக்டிவ் நியூஸ்ரூம் வெளியீடு",
+    r"மேலும் அறிக",
+    r"குறுங்காணொளிகள்",
+    r"குறுங்காணொளிகள் முடிவு",
+    r"(?i).*Pvt Ltd\.?$",
+    r"(?i)The Indian Express.*",
+    r"(?i)-picture:\d+/?",
+    r"(?i)Published by:\w+",
+    r"(?i)is a Special Correspondent",
+
     # Subscribe / Membership / Newsletter
     r"(?i)Sign in to unlock member-only benefits",
     r"(?i)Access \d+ free stories every month",
@@ -123,6 +138,41 @@ JUNK_RE = [re.compile(p) for p in JUNK_PATTERNS]
 # Lines shorter than this are likely navigation fragments, not article prose
 MIN_LINE_LENGTH = 15
 
+
+
+def normalize_political_parties(text):
+    PARTY_MAP = {
+        r'(?i)\bதி\.?மு\.?க\b': 'DMK',
+        r'(?i)\bஅ\.?தி\.?மு\.?க\b': 'AIADMK',
+        r'(?i)\bபா\.?ஜ\.?க\b': 'BJP',
+        r'(?i)\bகாங்கிரஸ்\b': 'Congress',
+        r'(?i)\bத\.?வெ\.?க\b': 'TVK',
+        r'(?i)\bபா\.?ம\.?க\b': 'PMK',
+        r'(?i)\bதே\.?மு\.?தி\.?க\b': 'DMDK',
+        r'(?i)\bநா\.?த\.?க\b': 'NTK',
+        r'(?i)\bவி\.?சி\.?க\b': 'VCK',
+        r'(?i)\bம\.?தி\.?மு\.?க\b': 'MDMK',
+        r'(?i)\bசி\.?பி\.?ஐ\b': 'CPI',
+        r'(?i)\bசி\.?பி\.?எம்\b': 'CPM',
+        r'(?i)திராவிட\s*முன்னேற்றக்\s*கழகம்': 'DMK',
+        r'(?i)அண்ணா\s*திராவிட\s*முன்னேற்றக்\s*கழகம்': 'AIADMK',
+        r'(?i)தமிழக\s*வெற்றிக்\s*கழகம்': 'TVK',
+        r'(?i)பாரதிய\s*ஜனதா\s*கட்சி': 'BJP',
+        r'(?i)\bD\.?M\.?K\.?\b': 'DMK',
+        r'(?i)\bA\.?I\.?A\.?D\.?M\.?K\.?\b': 'AIADMK',
+        r'(?i)\bB\.?J\.?P\.?\b': 'BJP',
+        r'(?i)\bT\.?V\.?K\.?\b': 'TVK',
+        r'(?i)\bP\.?M\.?K\.?\b': 'PMK',
+        r'(?i)\bD\.?M\.?D\.?K\.?\b': 'DMDK',
+        r'(?i)\bN\.?T\.?K\.?\b': 'NTK',
+        r'(?i)\bV\.?C\.?K\.?\b': 'VCK',
+        r'(?i)\bM\.?D\.?M\.?K\.?\b': 'MDMK',
+        r'(?i)\bC\.?P\.?I\.?\b': 'CPI',
+        r'(?i)\bC\.?P\.?M\.?\b': 'CPM',
+    }
+    for tamil_pattern, eng_abbr in PARTY_MAP.items():
+        text = re.sub(tamil_pattern, eng_abbr, text)
+    return text
 
 def deep_clean_text(text):
     """
@@ -218,42 +268,7 @@ def deep_clean_text(text):
         result = re.sub(outlet_pat, "", result)
     
     # ── Pass 3: Political Entity Normalization ──
-    # Standardize Tamil abbreviations so the multilingual embedding model
-    # perfectly aligns Tamil and English articles about the same party.
-    PARTY_MAP = {
-        r'(?i)\bதி\.?மு\.?க\b': 'DMK',
-        r'(?i)\bஅ\.?தி\.?மு\.?க\b': 'AIADMK',
-        r'(?i)\bபா\.?ஜ\.?க\b': 'BJP',
-        r'(?i)\bகாங்கிரஸ்\b': 'Congress',
-        r'(?i)\bத\.?வெ\.?க\b': 'TVK',
-        r'(?i)\bபா\.?ம\.?க\b': 'PMK',
-        r'(?i)\bதே\.?மு\.?தி\.?க\b': 'DMDK',
-        r'(?i)\bநா\.?த\.?க\b': 'NTK',
-        r'(?i)\bவி\.?சி\.?க\b': 'VCK',
-        r'(?i)\bம\.?தி\.?மு\.?க\b': 'MDMK',
-        r'(?i)\bசி\.?பி\.?ஐ\b': 'CPI',
-        r'(?i)\bசி\.?பி\.?எம்\b': 'CPM',
-        r'(?i)திராவிட\s*முன்னேற்றக்\s*கழகம்': 'DMK',
-        r'(?i)அண்ணா\s*திராவிட\s*முன்னேற்றக்\s*கழகம்': 'AIADMK',
-        r'(?i)தமிழக\s*வெற்றிக்\s*கழகம்': 'TVK',
-        r'(?i)பாரதிய\s*ஜனதா\s*கட்சி': 'BJP',
-        # English variations with and without dots
-        r'(?i)\bD\.?M\.?K\.?\b': 'DMK',
-        r'(?i)\bA\.?I\.?A\.?D\.?M\.?K\.?\b': 'AIADMK',
-        r'(?i)\bB\.?J\.?P\.?\b': 'BJP',
-        r'(?i)\bT\.?V\.?K\.?\b': 'TVK',
-        r'(?i)\bP\.?M\.?K\.?\b': 'PMK',
-        r'(?i)\bD\.?M\.?D\.?K\.?\b': 'DMDK',
-        r'(?i)\bN\.?T\.?K\.?\b': 'NTK',
-        r'(?i)\bV\.?C\.?K\.?\b': 'VCK',
-        r'(?i)\bM\.?D\.?M\.?K\.?\b': 'MDMK',
-        r'(?i)\bC\.?P\.?I\.?\b': 'CPI',
-        r'(?i)\bC\.?P\.?M\.?\b': 'CPM',
-    }
-    
-    for tamil_pattern, eng_abbr in PARTY_MAP.items():
-        # Using regex to catch variations with or without dots (e.g. தி.மு.க or திமுக)
-        result = re.sub(tamil_pattern, eng_abbr, result)
+    result = normalize_political_parties(result)
         
     # ── Pass 4: UTF-8 Enforcement & Emoji/Symbol Removal ──
     # Keep only ASCII (English + punctuation) and Tamil Unicode block.
@@ -319,23 +334,154 @@ def get_canonical_url(url):
 # ─── Skip Keywords ───
 # Keywords to filter out unwanted topics (entertainment, astrology, ayurveda, etc.)
 SKIP_KEYWORDS = [
+    # English Entertainment & Gossip
     'cinema', 'actor', 'actress', 'movie', 'film', 'box office', 'review', 'trailer',
     'bollywood', 'kollywood', 'tollywood', 'hollywood', 'celebrity', 'gossip', 'tv show',
+    'bigg boss', 'big boss', '/photogallery/', '/explanations/',
     '/videos/', '/video/', '/shorts/', '/photos/', '/photo/', '/gallery/', '/web-stories/', '/podcasts/', '/podcast/',
+    
+    # Tamil Entertainment & Gossip
+    'சினிமா', 'நடிகர்', 'நடிகை', 'படம்', 'திரைப்படம்', 'பாக்ஸ் ஆபிஸ்', 'விமர்சனம்', 'ட்ரைலர்', 'டிரெய்லர்',
+    'பாலிவுட்', 'கோலிவுட்', 'டாலிவுட்', 'ஹாலிவுட்', 'பிரபலம்', 'கிசுகிசு', 'டிவி ஷோ',
+    'சீரியல்', 'விஜய் டிவி', 'சன் டிவி', 'ஜீ தமிழ்', 'பிக்பாஸ்', 'வைரல்',
+    'பொழுதுபோக்கு', 'கவர்ச்சி', 'படுக்கையறை', 'உறவு',
+
+    # English Astrology & Remedies
     'astrology', 'horoscope', 'zodiac', 'vastu', 'ayurveda', 'ayurvedic', 'remedy', 'remedies',
+    
+    # Tamil Astrology & Remedies
+    'ஜோதிடம்', 'ராசிபலன்', 'ராசி', 'வாஸ்து', 'ஆயுர்வேதம்', 'பரிகாரம்', 'ஜாதகம்', 'சனிப்பெயர்ச்சி', 'குருப்பெயர்ச்சி',
+
+    # English Sensationalism & Rumors
     'rumor', 'rumours', 'fake news', 'viral video', 'bizarre', 'shocking', 'scandal',
+    
+    # Tamil Sensationalism & Rumors
+    'வதந்தி', 'போலி செய்தி', 'வைரல் வீடியோ', 'அதிர்ச்சி', 'சர்ச்சை', 'ஸ்கேண்டல்', 'பகீர்',
+
+    # English Lifestyle & Miscellany
     'lottery', 'kerala lottery', 'win news', 'entertainment', 'gaming', 'video game', 'esports',
     'tips', 'tricks', 'recipe', 'food recipe', 'dish', 'ingredient', 'cook', 'baking',
+    'health tips', 'lifestyle', 'wellness', 'weight loss', 'home remedies', 'fitness',
+    '/lifestyle/', '/health/', '/wellness/', '/fitness/', '/cooking/', '/recipe/',
+    'recruitment', 'hiring', 'job opening', 'vacancy',
+    
+    # Tamil Lifestyle & Miscellany
+    'லாட்டரி', 'கேரளா லாட்டரி', 'கேமிங்', 'வீடியோ கேம்',
+    'டிப்ஸ்', 'குறிப்புகள்', 'ரெசிபி', 'சமையல்', 'உணவு', 'சாப்பாடு', 'ருசியான', 'சுவையான', 'சிறப்பம்சங்கள்',
+    'ஆரோக்கியக் குறிப்புகள்', 'உடல்நலக் குறிப்புகள்', 'லைஃப்ஸ்டைல்', 'வாழ்க்கை முறை', 'டயட்', 'எடை குறைப்பு', 'நல்வாழ்வு',
+    'நியமனம்', 'வேலைவாய்ப்பு',
+
+    # English Tech & E-commerce
     'unboxing', 'specifications', 'price in india', 'smartphone review', 'phone review', 'gadget review', 'hands-on', 'hands on', 'first look',
     'offer', 'discount', 'amazon sale', 'flipkart sale', 'recharge plan', 'data plan', 'telecom plan', 'jio plan', 'airtel plan', 'vi plan', 'broadband plan',
     'mobile', 'smartphone', 'smartphones', 'smart tv', 'prepaid', 'postpaid', 'validity', 'bsnl', 'vodafone', 'idea', 'jio', 'airtel', 'vi', 'launch',
-    'சினிமா', 'நடிகர்', 'நடிகை', 'படம்', 'திரைப்படம்', 'விமர்சனம்', 'ஜோதிடம்', 'ராசிபலன்', 'வதந்தி', 'பொழுதுபோக்கு',
-    'டிப்ஸ்', 'சமையல்', 'குறிப்பு', 'உணவு', 'சாப்பாடு', 'ருசியான', 'சுவையான', 'சிறப்பம்சங்கள்',
-    'சலுகை', 'தள்ளுபடி', 'ரீசார்ஜ்', 'ஆஃபர்', 'டேட்டா திட்டம்', 'ஸ்மார்ட்போன்', 'ப்ரீபெய்ட்', 'போஸ்ட்பெய்ட்', 'வேலிடிட்டி', 'மொபைல்'
+    
+    # Tamil Tech & E-commerce
+    'அன்பாக்சிங்', 'இந்திய விலை', 'ஸ்மார்ட்போன் விமர்சனம்', 'போன் விமர்சனம்',
+    'ஆஃபர்', 'சலுகை', 'தள்ளுபடி', 'அமேசான் சேல்', 'பிளிப்கார்ட் சேல்', 'ரீசார்ஜ்', 'டேட்டா திட்டம்', 'டெலிகாம்', 'ஜியோ திட்டம்', 'ஏர்டெல் திட்டம்', 'வி திட்டம்', 'பிராட்பேண்ட்',
+    'மொபைல்', 'ஸ்மார்ட்போன்', 'ஸ்மார்ட் டிவி', 'ப்ரீபெய்ட்', 'போஸ்ட்பெய்ட்', 'வேலிடிட்டி', 'பிஎஸ்என்எல்', 'வோடபோன்', 'ஐடியா', 'ஜியோ', 'ஏர்டெல்', 'அறிமுகம்'
 ]
 
 FESTIVAL_KEYWORDS = [
-    'festival', 'diwali', 'deepavali', 'pongal', 'navratri', 'pooja', 'pujan', 'பண்டிகை'
+    'festival', 'diwali', 'deepavali', 'pongal', 'navratri', 'pooja', 'pujan',
+    'பண்டிகை', 'தீபாவளி', 'பொங்கல்', 'நவராத்திரி', 'பூஜை', 'திருவிழா', 'விநாயகர்', 'சதுர்த்தி', 'கிருஷ்ண', 'ஜெயந்தி'
 ]
 
 BREAKING_NEWS_KEYWORDS = ['breaking', 'flash', 'alert', 'முக்கிய செய்தி', 'பிரேக்கிங்']
+
+
+# ─── Topic Classification & Outlet Cleaners ───
+
+TOPIC_KEYWORDS = {
+    'politics': ['election', 'parliament', 'minister', 'bjp', 'dmk', 'congress', 'aiadmk', 'tvk', 'pmk', 'vck', 'ntk', 'தேர்தல்', 'நாடாளுமன்றம்', 'முதல்வர்', 'அமைச்சர்', 'அரசியல்', 'சட்டமன்றம்', 'எம்.எல்.ஏ'],
+    'world_news': ['international', 'global', 'us', 'china', 'ukraine', 'nato', 'russia', 'israel', 'gaza', 'சர்வதேச', 'உலக', 'அமெரிக்கா', 'சீனா', 'ரஷ்யா', 'இலங்கை'],
+    'economy': ['economy', 'gdp', 'inflation', 'rbi', 'stock market', 'rupee', 'market', 'business', 'பொருளாதாரம்', 'பணவீக்கம்', 'பங்குச்சந்தை', 'ரூபாய்', 'வர்த்தகம்', 'பட்ஜெட்'],
+    'crime_law': ['murder', 'arrest', 'police', 'court', 'fir', 'cbi', 'supreme court', 'high court', 'கொலை', 'கைது', 'காவல்', 'நீதிமன்றம்', 'வழக்கு', 'தீர்ப்பு', 'சிபிஐ', 'போலீஸ்'],
+    'science_health': ['research', 'vaccine', 'who', 'hospital', 'climate', 'space', 'isro', 'nasa', 'health', 'disease', 'ஆராய்ச்சி', 'தடுப்பூசி', 'மருத்துவம்', 'காலநிலை', 'சுகாதாரம்', 'விண்வெளி', 'இஸ்ரோ', 'மருத்துவமனை'],
+    'sports': ['cricket', 'ipl', 'match', 'tournament', 'champion', 'olympics', 'tennis', 'football', 'கிரிக்கெட்', 'போட்டி', 'வெற்றி', 'ஐபிஎல்', 'விளையாட்டு', 'ஒலிம்பிக்'],
+    'education': ['school', 'university', 'exam', 'neet', 'syllabus', 'students', 'college', 'பள்ளி', 'பல்கலைக்கழகம்', 'தேர்வு', 'நீட்', 'மாணவர்கள்', 'கல்லூரி', 'கல்வி'],
+}
+
+def classify_topic(title, text, outlet_slug=""):
+    if outlet_slug == "bbc_tamil":
+        return "world_news"
+    if outlet_slug == "tamil_mykhel":
+        return "sports"
+
+    combined_text = (str(title) + " " + str(title) + " " + str(text)[:300]).lower()
+
+    scores = {topic: 0 for topic in TOPIC_KEYWORDS}
+    for topic, keywords in TOPIC_KEYWORDS.items():
+        for kw in keywords:
+            if kw in combined_text:
+                scores[topic] += combined_text.count(kw)
+
+    best_topic = max(scores, key=scores.get)
+    if scores[best_topic] > 0:
+        return best_topic
+    return "general"
+
+def clean_times_of_india(title, text):
+    title = re.sub(r"^\s*-\s*", "", title)
+    text = re.sub(r"^[A-Za-z\s]{3,20}\s*:\s*", "", text)
+    text = re.sub(r"(?i)In\s+[A-Za-z]+\s*\|\s*LPG\s+Price.*$", "", text).strip()
+    return title, text
+
+def clean_bbc_tamil(title, text):
+    # Remove footer
+    text = re.sub(r"- இது, க்காக கலெக்டிவ் நியூஸ்ரூம் வெளியீடு[\s\S]*", "", text)
+    # Remove author header block
+    text = re.sub(r"(?im)^-?\s*(எழுதியவர்,|பதவி,|பிரசுரிக்கப்பட்டது|வாசிக்கும் நேரம்:).*?$", "", text)
+    return title, text
+
+def clean_dinamani(title, text):
+    match = re.search(r'([\u0B80-\u0BFF][\.\?!]?\s*)[^\u0B80-\u0BFF]*$', text)
+    if match:
+        non_tamil_part = text[match.end(1):]
+        if re.search(r'[a-zA-Z]{2,}', non_tamil_part):
+            text = text[:match.end(1)].strip()
+            
+    text = re.sub(r"(?i)-picture:\d+/?", "", text)
+    text = re.sub(r"(?i).*கோப்புப்\s*படம்.*", "", text)
+    return title, text
+
+def clean_indian_express(title, text):
+    text = re.sub(r"(?i)Story continues below this ad", "", text)
+    text = re.sub(r"(?i)Loading recommendations", "", text)
+    text = re.sub(r"(?i)pic\.twitter\.com/\w+", "", text)
+    text = re.sub(r"(?i)IE Online Media Services PVT LTD", "", text)
+    text = re.sub(r"(?i).*Pvt Ltd\.?$", "", text)
+    text = re.sub(r"(?i).*The Indian Express.*", "", text)
+    text = re.sub(r"(?i).*is a Special Correspondent.*", "", text)
+    return title, text
+
+def clean_tamil_oneindia(title, text):
+    text = re.sub(r"^[A-Za-z\u0B80-\u0BFF\s]{3,20}\s*:\s*", "", text)
+    return title, text
+
+def clean_news18(title, text, url=""):
+    text = re.sub(r"^[A-Za-z\s]+\s*\|\s*", "", text)
+    if text.startswith(title):
+        text = text[len(title):].strip()
+    text = re.sub(r"^\s*-\s*Published\s*by\s*:\s*[A-Za-z\.]+\s*", "", text, flags=re.IGNORECASE)
+    return title, text
+
+def clean_tamil_mykhel(title, text, url=""):
+    return title, text
+
+def apply_outlet_cleaners(title, text, outlet_slug, url=""):
+    if outlet_slug == "bbc_tamil":
+        return clean_bbc_tamil(title, text)
+    elif outlet_slug == "times_of_india":
+        return clean_times_of_india(title, text)
+    elif outlet_slug == "dinamani":
+        return clean_dinamani(title, text)
+    elif outlet_slug == "indian_express":
+        return clean_indian_express(title, text)
+    elif outlet_slug == "tamil_one_india":
+        return clean_tamil_oneindia(title, text)
+    elif outlet_slug in ["news18_india", "news18_tamil_nadu"]:
+        return clean_news18(title, text, url)
+    elif outlet_slug == "tamil_mykhel":
+        return clean_tamil_mykhel(title, text, url)
+    return title, text
