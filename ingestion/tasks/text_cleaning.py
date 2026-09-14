@@ -189,7 +189,7 @@ def extract_dateline_location(text):
     """
     if not text:
         return '', ''
-    pattern = r'^\s*(?:\[(?P<loc1>[^\]]+)\]|(?P<loc2>[a-zA-Z\u0B80-\u0BFF\s]{2,30}))\s*(?:\([^\)]+\))?\s*(?::-|\:|\||\-|\u2013|\u2014)\s*'
+    pattern = r'^\s*(?:\[(?P<loc1>[^\]]+)\]|(?P<loc2>[a-zA-Z\u0B80-\u0BFF\s\/,&]{2,50}))\s*(?:\([^\)]+\))?\s*(?::-|\:|\||\-|\u2013|\u2014)\s*'
     match = re.match(pattern, text)
     if match:
         raw_loc = (match.group('loc1') or match.group('loc2') or '').strip()

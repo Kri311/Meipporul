@@ -465,8 +465,8 @@ def main():
         print(f"Deleted existing {CSV_PATH}")
 
     # Load existing identifiers for deduplication
-    existing_guids, content_hashes, existing_urls = load_existing_data(CSV_PATH)
-    print(f"Existing articles in CSV: {len(existing_guids)}")
+    existing_guids, content_hashes, existing_urls = load_existing_data()
+    print(f"Existing articles in DB: {len(existing_guids)}")
     if args.limit:
         print(f"Target: up to {args.limit} new articles")
     else:

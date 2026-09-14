@@ -66,6 +66,22 @@ class FeedRun(Base):
     rss_feed = relationship("RssFeed", back_populates="feed_runs")
 
 
+
+class NewsCluster(Base):
+    """Represents a real-world news event cluster"""
+    __tablename__ = "news_clusters"
+
+    id = Column(Integer, primary_key=True, index=True)
+    representative_title = Column(String, nullable=False)
+    topic = Column(String, nullable=True)
+    article_count = Column(Integer, default=1)
+    centroid_embedding = Column(Vector(768), nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    articles = relationship("Article", back_populates="cluster")
+
 class Article(Base):
     """The core table storing the raw, cleaned, and embedded news article"""
     __tablename__ = "articles"
@@ -87,17 +103,26 @@ class Article(Base):
     article_length = Column(String(20))            # 'short', 'medium', 'long'
     data_fetch_via = Column(String(50), default="Native RSS") # 'Native RSS', 'Google News RSS'
     
+    
     # 3. Text & Content
     raw_text = Column(Text, nullable=True)
     clean_text = Column(Text, nullable=True)
     content_hash = Column(String, nullable=True)
+    semantic_text_hash = Column(String, nullable=True)
     
     extraction_method = Column(String, nullable=True) # 'rss' or 'trafilatura'
     extraction_quality = Column(Float, nullable=True)
     processing_status = Column(String, default="pending") # pending, extracted, embedded, failed
     
-    # Vector Embedding using pgvector (768 dimensions for Tamil-ai/tamil-embed-base)
+    # Cluster relationship
+    cluster_id = Column(Integer, ForeignKey("news_clusters.id"), nullable=True)
+    cluster = relationship("NewsCluster", back_populates="articles")
+    
+    # Vector Embedding using pgvector (768 dimensions)
     embedding = Column(Vector(768), nullable=True)
+    embedding_model = Column(String, nullable=True)
+    embedding_created_at = Column(DateTime, nullable=True)
+
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
