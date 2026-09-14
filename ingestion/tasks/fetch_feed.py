@@ -17,7 +17,8 @@ from ingestion.tasks.text_cleaning import (
     clean_html, deep_clean_text, detect_language, get_canonical_url,
     SKIP_KEYWORDS, FESTIVAL_KEYWORDS, BREAKING_NEWS_KEYWORDS,
     classify_topic, apply_outlet_cleaners,
-    normalize_political_parties
+    normalize_political_parties,
+    extract_dateline_location
 )
 
 
@@ -165,6 +166,7 @@ def process_single_feed(self, feed_id: int):
             detected_lang = detect_language(final_text)
             
             # Apply per-outlet cleaners and classify topic
+            loc, final_text = extract_dateline_location(final_text)
             title_clean, final_text = apply_outlet_cleaners(clean_html(title), final_text, outlet_slug, canonical_url)
             
             # Remove title duplication from body using a smarter line-by-line check BEFORE collapsing newlines
@@ -191,7 +193,7 @@ def process_single_feed(self, feed_id: int):
             # STANDARD: Ensure content explicitly begins with the Title followed by the Body
             final_text = f"{title_clean}\n\n{final_text}"
             
-            topic = classify_topic(title_clean, final_text, outlet_slug)
+            topic = classify_topic(title_clean, final_text, outlet_slug, location=loc)
             
             # Categorize article length for summarizer models
             word_count = len(final_text.split())

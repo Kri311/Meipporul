@@ -46,7 +46,8 @@ from ingestion.tasks.text_cleaning import (
     clean_html, deep_clean_text, detect_language, get_canonical_url,
     SKIP_KEYWORDS, FESTIVAL_KEYWORDS, BREAKING_NEWS_KEYWORDS,
     classify_topic, apply_outlet_cleaners,
-    normalize_political_parties
+    normalize_political_parties,
+    extract_dateline_location
 )
 
 # ─── Constants ───
@@ -278,6 +279,7 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
             detected_lang = detect_language(final_text)
             
             # Apply per-outlet cleaners and classify topic
+            loc, final_text = extract_dateline_location(final_text)
             clean_title, final_text = apply_outlet_cleaners(clean_title, final_text, outlet_slug, canonical_url)
             
             # Remove title duplication from body using a smarter line-by-line check BEFORE collapsing newlines
@@ -306,7 +308,7 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
             # so we ensure the gap between title and body is exact.
             final_text = f"{clean_title}\n\n{final_text}"
             
-            topic = classify_topic(clean_title, final_text, outlet_slug)
+            topic = classify_topic(clean_title, final_text, outlet_slug, location=loc)
             
             # Strictly filter out entertainment/gossip/festival noise by enforcing topic rules for Tamil
             # "political, world news, important ones, govt related, etc"

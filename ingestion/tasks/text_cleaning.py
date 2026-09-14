@@ -174,6 +174,31 @@ def normalize_political_parties(text):
         text = re.sub(tamil_pattern, eng_abbr, text)
     return text
 
+
+NON_LOCATION_PREFIXES = {
+    'note', 'update', 'warning', 'report', 'breaking', 'alert', 'live', 'opinion',
+    'editorial', 'analysis', 'watch', 'photos', 'video', 'special report',
+    'முக்கிய செய்தி', 'செய்தி', 'நேரலை', 'சிறப்பு செய்தி', 'அறிவிப்பு', 'எச்சரிக்கை'
+}
+
+def extract_dateline_location(text):
+    """
+    Extracts dateline location prefix (e.g. 'Chennai: ', 'NEW DELHI - ', 'சென்னை | ', 'புதுடெல்லி:')
+    from the beginning of the text, returning (location, cleaned_text).
+    Removes the location prefix from cleaned_text.
+    """
+    if not text:
+        return '', ''
+    pattern = r'^\s*(?:\[(?P<loc1>[^\]]+)\]|(?P<loc2>[a-zA-Z\u0B80-\u0BFF\s]{2,30}))\s*(?:\([^\)]+\))?\s*(?::-|\:|\||\-|\u2013|\u2014)\s*'
+    match = re.match(pattern, text)
+    if match:
+        raw_loc = (match.group('loc1') or match.group('loc2') or '').strip()
+        cleaned_text = text[match.end():].strip()
+        if raw_loc.lower() in NON_LOCATION_PREFIXES:
+            return '', cleaned_text
+        return raw_loc, cleaned_text
+    return '', text.strip()
+
 def deep_clean_text(text):
     """
     Aggressively strips paywall banners, subscription prompts,
@@ -283,7 +308,6 @@ def deep_clean_text(text):
     
     
     # Strip dateline prefixes like "Chennai | " or "சென்னை: " from the VERY BEGINNING of the text
-    result = re.sub(r"^(?:[A-Za-z\s]{3,20}|[\u0B80-\u0BFF\s]{3,20})\s*(?:\||\:\-|\:)\s*", "", result.strip())
     
     return result.strip()
 
@@ -402,13 +426,13 @@ TOPIC_KEYWORDS = {
     'education': ['school', 'university', 'exam', 'neet', 'syllabus', 'students', 'college', 'பள்ளி', 'பல்கலைக்கழகம்', 'தேர்வு', 'நீட்', 'மாணவர்கள்', 'கல்லூரி', 'கல்வி'],
 }
 
-def classify_topic(title, text, outlet_slug=""):
+def classify_topic(title, text, outlet_slug="", location=""):
     if outlet_slug == "bbc_tamil":
         return "world_news"
     if outlet_slug == "tamil_mykhel":
         return "sports"
 
-    combined_text = (str(title) + " " + str(title) + " " + str(text)[:300]).lower()
+    combined_text = (str(title) + " " + str(title) + " " + str(location) + " " + str(location) + " " + str(text)[:300]).lower()
 
     scores = {topic: 0 for topic in TOPIC_KEYWORDS}
     for topic, keywords in TOPIC_KEYWORDS.items():
