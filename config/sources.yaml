@@ -30,7 +30,7 @@ sources:
   language: ta
   homepage: https://www.bbc.com/tamil
   rss:
-  - https://feeds.bbci.co.uk/tamil/rss.xml
+  - https://bbc.github.io/world-service-rss/tamil.html
   enabled: true
   orientation_bucket: IND
   orientation_confidence: 0.95

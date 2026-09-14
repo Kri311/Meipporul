@@ -37,6 +37,7 @@ import feedparser
 import requests
 import trafilatura
 import yaml
+from ingestion.models.database import SessionLocal, Article, Outlet, RssFeed
 
 # Ensure project root is in the Python path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -70,14 +71,26 @@ HTTP_HEADERS = {
 }
 
 
-def load_existing_data(csv_path):
-    """Load existing identifiers from the CSV for deduplication (scoped per outlet)."""
+def load_existing_data():
+    """Load existing identifiers from PostgreSQL for deduplication (scoped per outlet)."""
     guids = set()
     content_hashes = set()
     existing_urls = set()
     
-    if not os.path.exists(csv_path):
-        return guids, content_hashes, existing_urls
+    db = SessionLocal()
+    try:
+        articles = db.query(Article.guid, Article.content_hash, Article.canonical_url, Outlet.slug).join(Outlet).all()
+        for art in articles:
+            if art.slug and art.guid:
+                guids.add((art.slug, art.guid))
+            if art.slug and art.content_hash:
+                content_hashes.add((art.slug, art.content_hash))
+            if art.canonical_url:
+                existing_urls.add(art.canonical_url)
+    finally:
+        db.close()
+        
+    return guids, content_hashes, existing_urls
         
     try:
         with open(csv_path, "r", encoding="utf-8") as f:
@@ -383,16 +396,43 @@ def run_fetch_cycle(args, existing_guids, content_hashes, existing_urls, sources
     elapsed = time.time() - start_time
     print()
 
-    # Write new articles to CSV
+    # Write new articles to PostgreSQL
     if new_articles:
-        file_exists = os.path.exists(CSV_PATH)
-        with open(CSV_PATH, "a", newline="", encoding="utf-8-sig") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=CSV_FIELDNAMES)
-            if not file_exists:
-                writer.writeheader()
-            for article in new_articles:
-                writer.writerow(article)
-
+        print(f"\nSaving {len(new_articles)} new articles to PostgreSQL...")
+        db = SessionLocal()
+        try:
+            for article_dict in new_articles:
+                outlet = db.query(Outlet).filter(Outlet.slug == article_dict['outlet_slug']).first()
+                if not outlet:
+                    continue
+                
+                art = Article(
+                    outlet_id=outlet.id,
+                    guid=article_dict['guid'],
+                    canonical_url=article_dict['canonical_url'],
+                    original_url=article_dict['canonical_url'],
+                    title=article_dict['title'],
+                    description=article_dict['description'],
+                    author=article_dict['author'],
+                    published_at=datetime.fromisoformat(article_dict['published_at']) if article_dict['published_at'] else None,
+                    language=article_dict['language'],
+                    article_length=article_dict['article_length'],
+                    data_fetch_via=article_dict['data_fetch_via'],
+                    raw_text=article_dict['raw_text'],
+                    clean_text=article_dict['clean_text'],
+                    content_hash=article_dict['content_hash'],
+                    extraction_method=article_dict['extraction_method'],
+                    extraction_quality=article_dict.get('extraction_quality', 0.0),
+                    processing_status="extracted"
+                )
+                db.add(art)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"Error saving to DB: {e}")
+        finally:
+            db.close()
+            
         print(f"Written {len(new_articles)} new articles to {CSV_PATH}")
     else:
         print("No new articles found in this batch (all already in CSV or filtered out).")

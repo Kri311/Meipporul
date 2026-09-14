@@ -40,7 +40,7 @@ def export_to_csv(output_path="data/raw_processed.csv"):
                     "processing_status": article.processing_status,
                     "raw_text": article.raw_text,
                     "clean_text": article.clean_text,
-                    "topic": getattr(article, 'topic', ""), # wait, topic is not on Article model?
+                    "topic": article.cluster.topic if article.cluster else "", # wait, topic is not on Article model?
                     "cluster_id": article.cluster_id,
                     "semantic_text_hash": article.semantic_text_hash
                 })
