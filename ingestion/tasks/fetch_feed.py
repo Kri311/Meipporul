@@ -16,8 +16,14 @@ from ingestion.models.database import SessionLocal, RssFeed, FeedRun, Article
 from ingestion.tasks.text_cleaning import (
     clean_html, deep_clean_text, detect_language, get_canonical_url,
     SKIP_KEYWORDS, FESTIVAL_KEYWORDS, BREAKING_NEWS_KEYWORDS,
-    classify_topic, apply_outlet_cleaners
+    classify_topic, apply_outlet_cleaners,
+    normalize_political_parties
 )
+
+
+def normalize_str(s):
+    s = normalize_political_parties(s)
+    return re.sub(r'[^a-zA-Z0-9஀-௿]', '', s).lower()
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def process_single_feed(self, feed_id: int):
@@ -162,12 +168,6 @@ def process_single_feed(self, feed_id: int):
             title_clean, final_text = apply_outlet_cleaners(clean_html(title), final_text, outlet_slug, canonical_url)
             
             # Remove title duplication from body using a smarter line-by-line check BEFORE collapsing newlines
-            import re
-            
-            def normalize_str(s):
-                from ingestion.tasks.text_cleaning import normalize_political_parties
-                s = normalize_political_parties(s)
-                return re.sub(r'[^a-zA-Z0-9஀-௿]', '', s).lower()
                 
             norm_title = normalize_str(title_clean)
             
@@ -290,6 +290,11 @@ def process_single_feed(self, feed_id: int):
         
     return {"feed_id": feed_id, "new_articles": new_count, "total_seen": seen_count}
 
+
+
+def normalize_str(s):
+    s = normalize_political_parties(s)
+    return re.sub(r'[^a-zA-Z0-9஀-௿]', '', s).lower()
 
 @celery_app.task
 def dispatch_all_feeds():

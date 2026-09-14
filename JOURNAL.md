@@ -3380,3 +3380,38 @@ Prove retries / dedupe / health
 ```
 
 Once that pipeline is reliable, every later subsystem has a stable foundation to build on.
+
+## [2026-09-13 21:39 IST] — Topic Classification & Pipeline Cleanup
+
+### Goal
+Implement bilingual topic classification (8 categories), fix misconfigured sources, and dramatically improve per-outlet content cleaning.
+
+### What changed
+- Added `classify_topic()` function using bilingual English/Tamil keyword dictionaries.
+- Integrated per-outlet cleaner logic (`clean_times_of_india`, `clean_dinamani`, etc.) for noise specific to each publisher.
+- Fixed BBC Tamil RSS feed URL and applied `world_news` override.
+- Fixed Indian Express language metadata to `en`.
+- Disabled Google News aggregator pipelines and removed Tamil Gizbot entirely.
+- Expanded `SKIP_KEYWORDS` and `JUNK_PATTERNS` to catch viral/gossip/job news and inline ads.
+
+### Files changed
+- `config/sources.yaml`
+- `ingestion/config/sources.yaml`
+- `ingestion/tasks/text_cleaning.py`
+- `ingestion/tasks/fetch_feed.py`
+- `fetch_rss_standalone.py`
+
+### Technical decision
+Built a deterministic keyword-based classifier rather than an ML model to ensure zero additional latency during ingestion, and used explicit per-outlet regex filters to handle publisher-specific quirks that generic `trafilatura` extraction misses.
+
+### Why
+The topic classifier allows filtering the blindspot analysis by topic (e.g. comparing coverage on "politics" only). The per-outlet cleaners are required because syndicated wires and automated ads were leaking into the vector embeddings, causing spurious similarities.
+
+### Test evidence
+Ran `fetch_rss_standalone.py --fresh` across all 12 enabled feeds. Fetched 691 valid articles, filtered out 520 low-quality ones. Topic distribution: `world_news` (198), `politics` (131), `crime_law` (96), `sports` (64), `general` (138). Verified all BBC Tamil articles routed to `world_news` and Gizbot/Google News produced 0 articles.
+
+### Failure / bug encountered
+None during execution.
+
+### Next gate
+Event clustering and blindspot analysis across the newly cleaned data.

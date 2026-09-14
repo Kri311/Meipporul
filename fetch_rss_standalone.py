@@ -45,7 +45,8 @@ sys.path.insert(0, PROJECT_ROOT)
 from ingestion.tasks.text_cleaning import (
     clean_html, deep_clean_text, detect_language, get_canonical_url,
     SKIP_KEYWORDS, FESTIVAL_KEYWORDS, BREAKING_NEWS_KEYWORDS,
-    classify_topic, apply_outlet_cleaners
+    classify_topic, apply_outlet_cleaners,
+    normalize_political_parties
 )
 
 # ─── Constants ───
@@ -186,6 +187,12 @@ def parse_pub_date(entry):
     return datetime.utcnow()
 
 
+
+def normalize_str(s):
+    s = normalize_political_parties(s)
+    return re.sub(r'[^a-zA-Z0-9஀-௿]', '', s).lower()
+
+
 def process_feed(source, existing_guids, content_hashes, existing_urls, new_articles, limit=None):
     """
     Process a single RSS source (may contain multiple feed URLs).
@@ -274,12 +281,6 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
             clean_title, final_text = apply_outlet_cleaners(clean_title, final_text, outlet_slug, canonical_url)
             
             # Remove title duplication from body using a smarter line-by-line check BEFORE collapsing newlines
-            import re
-            
-            def normalize_str(s):
-                from ingestion.tasks.text_cleaning import normalize_political_parties
-                s = normalize_political_parties(s)
-                return re.sub(r'[^a-zA-Z0-9஀-௿]', '', s).lower()
                 
             norm_title = normalize_str(clean_title)
             
