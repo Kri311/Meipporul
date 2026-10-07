@@ -1,0 +1,50 @@
+{
+  "PERSON": [
+    {
+      "canonical": "M.K. Stalin",
+      "aliases": ["மு.க.ஸ்டாலின்", "மு.க ஸ்டாலின்", "ஸ்டாலின்", "மு.க.,ஸ்டாலின்", "M.K.Stalin", "M.K. Stalin", "M K Stalin"]
+    },
+    {
+      "canonical": "Narendra Modi",
+      "aliases": ["நரேந்திர மோடி", "மோடி", "Narendra Modi", "Modi"]
+    }
+  ],
+  "LOCATION": [
+    {
+      "canonical": "Chennai",
+      "aliases": ["சென்னை", "மெட்ராஸ்", "Madras", "Chennai"]
+    },
+    {
+      "canonical": "Tamil Nadu",
+      "aliases": ["தமிழ்நாடு", "தமிழகம்", "Tamil Nadu", "Tamilnadu", "TN"]
+    },
+    {
+      "canonical": "India",
+      "aliases": ["இந்தியா", "India"]
+    }
+  ],
+  "ORGANIZATION": [
+    {
+      "canonical": "DMK",
+      "aliases": ["திமுக", "திராவிட முன்னேற்றக் கழகம்", "DMK"]
+    },
+    {
+      "canonical": "AIADMK",
+      "aliases": ["அதிமுக", "அண்ணா திராவிட முன்னேற்றக் கழகம்", "AIADMK"]
+    },
+    {
+      "canonical": "BJP",
+      "aliases": ["பாஜக", "பாரதிய ஜனதா கட்சி", "BJP"]
+    },
+    {
+      "canonical": "Congress",
+      "aliases": ["காங்கிரஸ்", "Congress", "INC"]
+    }
+  ],
+  "EVENT": [
+    {
+      "canonical": "Elections",
+      "aliases": ["தேர்தல்", "Elections"]
+    }
+  ]
+}

@@ -54,3 +54,4 @@ logs/
 
 # Docker
 .docker/
+rss_daemon.pid

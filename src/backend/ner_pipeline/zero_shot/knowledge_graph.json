@@ -1,0 +1,404 @@
+{
+  "M.K. Stalin": {
+    "kg_id": "Q3530664",
+    "en": "M. K. Stalin",
+    "ta": "மு. க. ஸ்டாலின்",
+    "type": "PERSON"
+  },
+  "Edappadi Palaniswami": {
+    "kg_id": "Q28943486",
+    "en": "Edappadi K. Palaniswami",
+    "ta": "எடப்பாடி கே. பழனிசாமி",
+    "type": "PERSON"
+  },
+  "Narendra Modi": {
+    "kg_id": "Q47732",
+    "en": "Narendra Modi",
+    "ta": "நரேந்திர மோடி",
+    "type": "PERSON"
+  },
+  "Rahul Gandhi": {
+    "kg_id": "Q225916",
+    "en": "Rahul Gandhi",
+    "ta": "ராகுல் காந்தி",
+    "type": "PERSON"
+  },
+  "Amit Shah": {
+    "kg_id": "Q4746882",
+    "en": "Amit Shah",
+    "ta": "அமித் ஷா",
+    "type": "PERSON"
+  },
+  "Udhayanidhi Stalin": {
+    "kg_id": "Q7877196",
+    "en": "Udhayanidhi Stalin",
+    "ta": "உதயநிதி ஸ்டாலின்",
+    "type": "PERSON"
+  },
+  "Annamalai": {
+    "kg_id": "Q107471900",
+    "en": "K. Annamalai",
+    "ta": "கு. அண்ணாமலை",
+    "type": "PERSON"
+  },
+  "Chennai": {
+    "kg_id": "Q1352",
+    "en": "Chennai",
+    "ta": "சென்னை",
+    "type": "LOCATION"
+  },
+  "Tamil Nadu": {
+    "kg_id": "Q1445",
+    "en": "Tamil Nadu",
+    "ta": "தமிழ்நாடு",
+    "type": "LOCATION"
+  },
+  "India": {
+    "kg_id": "Q668",
+    "en": "India",
+    "ta": "இந்தியா",
+    "type": "LOCATION"
+  },
+  "Madurai": {
+    "kg_id": "Q228405",
+    "en": "Madurai",
+    "ta": "மதுரை",
+    "type": "LOCATION"
+  },
+  "Coimbatore": {
+    "kg_id": "Q228411",
+    "en": "Coimbatore",
+    "ta": "கோயம்புத்தூர்",
+    "type": "LOCATION"
+  },
+  "Tiruchirappalli": {
+    "kg_id": "Q234551",
+    "en": "Tiruchirappalli",
+    "ta": "திருச்சிராப்பள்ளி",
+    "type": "LOCATION"
+  },
+  "Salem": {
+    "kg_id": "Q228445",
+    "en": "Salem",
+    "ta": "சேலம்",
+    "type": "LOCATION"
+  },
+  "Tirunelveli": {
+    "kg_id": "Q228456",
+    "en": "Tirunelveli",
+    "ta": "திருநெல்வேலி",
+    "type": "LOCATION"
+  },
+  "DMK": {
+    "kg_id": "Q1282216",
+    "en": "Dravida Munnetra Kazhagam",
+    "ta": "திராவிட முன்னேற்றக் கழகம்",
+    "type": "ORGANIZATION"
+  },
+  "AIADMK": {
+    "kg_id": "Q339063",
+    "en": "All India Anna Dravida Munnetra Kazhagam",
+    "ta": "அகில இந்திய அண்ணா திராவிட முன்னேற்றக் கழகம்",
+    "type": "ORGANIZATION"
+  },
+  "BJP": {
+    "kg_id": "Q137538",
+    "en": "Bharatiya Janata Party",
+    "ta": "பாரதிய ஜனதா கட்சி",
+    "type": "ORGANIZATION"
+  },
+  "Congress": {
+    "kg_id": "Q10225",
+    "en": "Indian National Congress",
+    "ta": "இந்திய தேசிய காங்கிரஸ்",
+    "type": "ORGANIZATION"
+  },
+  "INC": {
+    "kg_id": "Q10225",
+    "en": "Indian National Congress",
+    "ta": "இந்திய தேசிய காங்கிரஸ்",
+    "type": "ORGANIZATION"
+  },
+  "NTK": {
+    "kg_id": "Q7062402",
+    "en": "Naam Tamilar Katchi",
+    "ta": "நாம் தமிழர் கட்சி",
+    "type": "ORGANIZATION"
+  },
+  "PMK": {
+    "kg_id": "Q339247",
+    "en": "Pattali Makkal Katchi",
+    "ta": "பாட்டாளி மக்கள் கட்சி",
+    "type": "ORGANIZATION"
+  },
+  "VCK": {
+    "kg_id": "Q3402772",
+    "en": "Viduthalai Chiruthaigal Katchi",
+    "ta": "விடுதலை சிறுத்தைகள் கட்சி",
+    "type": "ORGANIZATION"
+  },
+  "MDMK": {
+    "kg_id": "Q3333333",
+    "en": "Marumalarchi Dravida Munnetra Kazhagam",
+    "ta": "மறுமலர்ச்சி திராவிட முன்னேற்றக் கழகம்",
+    "type": "ORGANIZATION"
+  },
+  "CPI": {
+    "kg_id": "Q196160",
+    "en": "Communist Party of India",
+    "ta": "இந்தியக் கம்யூனிஸ்ட் கட்சி",
+    "type": "ORGANIZATION"
+  },
+  "CPI(M)": {
+    "kg_id": "Q162234",
+    "en": "Communist Party of India (Marxist)",
+    "ta": "இந்திய கம்யூனிஸ்ட் கட்சி (மார்க்சிஸ்ட்)",
+    "type": "ORGANIZATION"
+  },
+  "AMMK": {
+    "kg_id": "Q55389656",
+    "en": "Amma Makkal Munnetra Kazhagam",
+    "ta": "அம்மா மக்கள் முன்னேற்றக் கழகம்",
+    "type": "ORGANIZATION"
+  },
+  "DMDK": {
+    "kg_id": "Q3533869",
+    "en": "Desiya Murpokku Dravida Kazhagam",
+    "ta": "தேசிய முற்போக்கு திராவிட கழகம்",
+    "type": "ORGANIZATION"
+  },
+  "MNM": {
+    "kg_id": "Q55074211",
+    "en": "Makkal Needhi Maiam",
+    "ta": "மக்கள் நீதி மய்யம்",
+    "type": "ORGANIZATION"
+  },
+  "Supreme Court": {
+    "kg_id": "Q213380",
+    "en": "Supreme Court of India",
+    "ta": "இந்திய உச்ச நீதிமன்றம்",
+    "type": "ORGANIZATION"
+  },
+  "High Court": {
+    "kg_id": "Q3027878",
+    "en": "Madras High Court",
+    "ta": "சென்னை உயர் நீதிமன்றம்",
+    "type": "ORGANIZATION"
+  },
+  "Election Commission": {
+    "kg_id": "Q2419409",
+    "en": "Election Commission of India",
+    "ta": "இந்தியத் தேர்தல் ஆணையம்",
+    "type": "ORGANIZATION"
+  },
+  "Parliament": {
+    "kg_id": "Q330364",
+    "en": "Parliament of India",
+    "ta": "இந்திய நாடாளுமன்றம்",
+    "type": "ORGANIZATION"
+  },
+  "Lok Sabha": {
+    "kg_id": "Q244243",
+    "en": "Lok Sabha",
+    "ta": "மக்களவை",
+    "type": "ORGANIZATION"
+  },
+  "Rajya Sabha": {
+    "kg_id": "Q206977",
+    "en": "Rajya Sabha",
+    "ta": "மாநிலங்களவை",
+    "type": "ORGANIZATION"
+  },
+  "மு.க.ஸ்டாலின்": {
+    "kg_id": "Q3530664",
+    "en": "M. K. Stalin",
+    "ta": "மு. க. ஸ்டாலின்",
+    "type": "PERSON"
+  },
+  "எடப்பாடி பழனிசாமி": {
+    "kg_id": "Q28943486",
+    "en": "Edappadi K. Palaniswami",
+    "ta": "எடப்பாடி கே. பழனிசாமி",
+    "type": "PERSON"
+  },
+  "அண்ணாமலை": {
+    "kg_id": "Q107471900",
+    "en": "K. Annamalai",
+    "ta": "கு. அண்ணாமலை",
+    "type": "PERSON"
+  },
+  "ராகுல் காந்தி": {
+    "kg_id": "Q225916",
+    "en": "Rahul Gandhi",
+    "ta": "ராகுல் காந்தி",
+    "type": "PERSON"
+  },
+  "நரேந்திர மோடி": {
+    "kg_id": "Q47732",
+    "en": "Narendra Modi",
+    "ta": "நரேந்திர மோடி",
+    "type": "PERSON"
+  },
+  "அமித் ஷா": {
+    "kg_id": "Q4746882",
+    "en": "Amit Shah",
+    "ta": "அமித் ஷா",
+    "type": "PERSON"
+  },
+  "உதயநிதி ஸ்டாலின்": {
+    "kg_id": "Q7877196",
+    "en": "Udhayanidhi Stalin",
+    "ta": "உதயநிதி ஸ்டாலின்",
+    "type": "PERSON"
+  },
+  "சென்னை": {
+    "kg_id": "Q1352",
+    "en": "Chennai",
+    "ta": "சென்னை",
+    "type": "LOCATION"
+  },
+  "தமிழ்நாடு": {
+    "kg_id": "Q1445",
+    "en": "Tamil Nadu",
+    "ta": "தமிழ்நாடு",
+    "type": "LOCATION"
+  },
+  "தமிழகம்": {
+    "kg_id": "Q1445",
+    "en": "Tamil Nadu",
+    "ta": "தமிழ்நாடு",
+    "type": "LOCATION"
+  },
+  "இந்தியா": {
+    "kg_id": "Q668",
+    "en": "India",
+    "ta": "இந்தியா",
+    "type": "LOCATION"
+  },
+  "மதுரை": {
+    "kg_id": "Q228405",
+    "en": "Madurai",
+    "ta": "மதுரை",
+    "type": "LOCATION"
+  },
+  "கோவை": {
+    "kg_id": "Q228411",
+    "en": "Coimbatore",
+    "ta": "கோயம்புத்தூர்",
+    "type": "LOCATION"
+  },
+  "திருச்சி": {
+    "kg_id": "Q234551",
+    "en": "Tiruchirappalli",
+    "ta": "திருச்சிராப்பள்ளி",
+    "type": "LOCATION"
+  },
+  "சேலம்": {
+    "kg_id": "Q228445",
+    "en": "Salem",
+    "ta": "சேலம்",
+    "type": "LOCATION"
+  },
+  "திருநெல்வேலி": {
+    "kg_id": "Q228456",
+    "en": "Tirunelveli",
+    "ta": "திருநெல்வேலி",
+    "type": "LOCATION"
+  },
+  "திமுக": {
+    "kg_id": "Q1282216",
+    "en": "Dravida Munnetra Kazhagam",
+    "ta": "திராவிட முன்னேற்றக் கழகம்",
+    "type": "ORGANIZATION"
+  },
+  "அதிமுக": {
+    "kg_id": "Q339063",
+    "en": "All India Anna Dravida Munnetra Kazhagam",
+    "ta": "அகில இந்திய அண்ணா திராவிட முன்னேற்றக் கழகம்",
+    "type": "ORGANIZATION"
+  },
+  "பாஜக": {
+    "kg_id": "Q137538",
+    "en": "Bharatiya Janata Party",
+    "ta": "பாரதிய ஜனதா கட்சி",
+    "type": "ORGANIZATION"
+  },
+  "காங்கிரஸ்": {
+    "kg_id": "Q10225",
+    "en": "Indian National Congress",
+    "ta": "இந்திய தேசிய காங்கிரஸ்",
+    "type": "ORGANIZATION"
+  },
+  "நாதக": {
+    "kg_id": "Q7062402",
+    "en": "Naam Tamilar Katchi",
+    "ta": "நாம் தமிழர் கட்சி",
+    "type": "ORGANIZATION"
+  },
+  "பாமக": {
+    "kg_id": "Q339247",
+    "en": "Pattali Makkal Katchi",
+    "ta": "பாட்டாளி மக்கள் கட்சி",
+    "type": "ORGANIZATION"
+  },
+  "விசிக": {
+    "kg_id": "Q3402772",
+    "en": "Viduthalai Chiruthaigal Katchi",
+    "ta": "விடுதலை சிறுத்தைகள் கட்சி",
+    "type": "ORGANIZATION"
+  },
+  "மதிமுக": {
+    "kg_id": "Q3333333",
+    "en": "Marumalarchi Dravida Munnetra Kazhagam",
+    "ta": "மறுமலர்ச்சி திராவிட முன்னேற்றக் கழகம்",
+    "type": "ORGANIZATION"
+  },
+  "அமமுக": {
+    "kg_id": "Q55389656",
+    "en": "Amma Makkal Munnetra Kazhagam",
+    "ta": "அம்மா மக்கள் முன்னேற்றக் கழகம்",
+    "type": "ORGANIZATION"
+  },
+  "தேமுதிக": {
+    "kg_id": "Q3533869",
+    "en": "Desiya Murpokku Dravida Kazhagam",
+    "ta": "தேசிய முற்போக்கு திராவிட கழகம்",
+    "type": "ORGANIZATION"
+  },
+  "உச்ச நீதிமன்றம்": {
+    "kg_id": "Q213380",
+    "en": "Supreme Court of India",
+    "ta": "இந்திய உச்ச நீதிமன்றம்",
+    "type": "ORGANIZATION"
+  },
+  "உயர் நீதிமன்றம்": {
+    "kg_id": "Q3027878",
+    "en": "Madras High Court",
+    "ta": "சென்னை உயர் நீதிமன்றம்",
+    "type": "ORGANIZATION"
+  },
+  "தேர்தல் ஆணையம்": {
+    "kg_id": "Q2419409",
+    "en": "Election Commission of India",
+    "ta": "இந்தியத் தேர்தல் ஆணையம்",
+    "type": "ORGANIZATION"
+  },
+  "நாடாளுமன்றம்": {
+    "kg_id": "Q330364",
+    "en": "Parliament of India",
+    "ta": "இந்திய நாடாளுமன்றம்",
+    "type": "ORGANIZATION"
+  },
+  "மக்களவை": {
+    "kg_id": "Q244243",
+    "en": "Lok Sabha",
+    "ta": "மக்களவை",
+    "type": "ORGANIZATION"
+  },
+  "மாநிலங்களவை": {
+    "kg_id": "Q206977",
+    "en": "Rajya Sabha",
+    "ta": "மாநிலங்களவை",
+    "type": "ORGANIZATION"
+  }
+}

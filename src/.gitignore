@@ -1,0 +1,47 @@
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Data and Artifacts
+data/
+data_preprocess/
+retrieved_data/
+*.csv
+*.json
+*.sqlite3
+
+# Explicitly UN-ignore important frontend JSON configuration files
+!frontend/package.json
+!frontend/jsconfig.json
+!frontend/tsconfig.json
+!template_frontend_backup/frontend/package.json
+!template_frontend_backup/frontend/jsconfig.json
+!template_frontend_backup/frontend/tsconfig.json
+
+# Un-ignore specific dataset or knowledge graph files if needed
+!backend/ner_pipeline/zero_shot/gazetteer.json
+!backend/ner_pipeline/zero_shot/knowledge_graph.json
+!backend/ner_pipeline/finetune/dataset/*.json
+!backend/ner_pipeline/finetune/dataset/*.jsonl
+
+# Models & Checkpoints (Do not track large model files)
+model/
+checkpoints/
+*.safetensors
+*.pth
+*.pt
+*.bin
+vocab.txt
+
+# Frontend & Next.js
+.next/
+node_modules/
+build/
+out/
+.vercel/
+
+# Logs
+logs/
+*.log
