@@ -94,7 +94,7 @@ def generate_events(output_path=os.path.join(os.path.abspath(os.path.join(os.pat
             
         events.sort(key=lambda x: x.get('end_date', ''), reverse=True)
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+        with open(output_path, 'w', newline='', encoding='utf-8-sig') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=EVENT_CSV_FIELDNAMES)
             writer.writeheader()
             for ev in events:

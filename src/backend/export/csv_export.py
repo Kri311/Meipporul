@@ -20,7 +20,7 @@ def export_to_csv(output_path=os.path.join(os.path.abspath(os.path.join(os.path.
         articles = db.query(Article).order_by(Article.published_at.desc().nulls_last()).all()
         
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+        with open(output_path, 'w', newline='', encoding='utf-8-sig') as csvfile:
             writer = csv.DictWriter(csvfile, fieldnames=CSV_FIELDNAMES)
             writer.writeheader()
             
