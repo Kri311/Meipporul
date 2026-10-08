@@ -14,7 +14,7 @@ MODEL_DIR = os.path.join(BASE_DIR, "model")
 
 # --- Model ---
 BASE_MODEL_NAME = "google/muril-base-cased"
-MAX_SEQ_LENGTH = 256  # RTX 3050 (5.6GB VRAM) friendly
+MAX_SEQ_LENGTH = 192  # Keep activation memory bounded on 5.6GB GPUs
 
 # --- Entity Labels (BIO scheme) ---
 # Our target entity types
@@ -31,8 +31,9 @@ ID2LABEL = {i: label for i, label in enumerate(LABEL_LIST)}
 NUM_LABELS = len(LABEL_LIST)
 
 # --- Training Hyperparameters (optimized for RTX 3050 5.6GB) ---
-TRAIN_BATCH_SIZE = 8
-EVAL_BATCH_SIZE = 16
+TRAIN_BATCH_SIZE = 1
+EVAL_BATCH_SIZE = 1
+GRADIENT_ACCUMULATION_STEPS = 8  # effective training batch remains 8
 LEARNING_RATE = 3e-5
 NUM_EPOCHS = 10
 WEIGHT_DECAY = 0.01

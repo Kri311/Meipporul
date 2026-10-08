@@ -27,6 +27,7 @@ from backend.ner_pipeline.zero_shot.normalization import (
     normalize_entity_text,
     strip_tamil_morphology,
 )
+from backend.ingestion.tasks.text_cleaning import parse_clean_article
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -55,7 +56,9 @@ else:
 
 NER_BATCH_SIZE = int(os.getenv("NER_BATCH_SIZE", "16"))
 # Process more sentences for better entity coverage from article body
-MAX_SENTENCES = int(os.getenv("NER_MAX_SENTENCES", "10"))
+# By default, NER sees every sentence. Set NER_MAX_SENTENCES to a positive
+# value only when deliberately trading entity recall for throughput.
+MAX_SENTENCES = int(os.getenv("NER_MAX_SENTENCES", "0"))
 
 _ner_pipeline = None
 _entity_linker = None
@@ -171,12 +174,32 @@ def get_ner_pipeline():
         from transformers import pipeline
         device = 0 if torch.cuda.is_available() else -1
         logger.info(f"Loading {NER_MODEL_NAME} on {'GPU' if device == 0 else 'CPU'}...")
-        _ner_pipeline = pipeline(
-            "ner",
-            model=NER_MODEL_NAME,
-            aggregation_strategy="simple",
-            device=device,
-        )
+        # The locally fine-tuned MuRIL model ships a BERT vocab. Loading its
+        # bundled fast tokenizer can pick up stale tokenizer.json metadata and
+        # fail with an unrelated Mistral regex error; force the vocab tokenizer.
+        try:
+            if os.path.isdir(NER_MODEL_NAME):
+                from transformers import AutoModelForTokenClassification, AutoTokenizer
+                tokenizer = AutoTokenizer.from_pretrained(NER_MODEL_NAME, use_fast=False)
+                model = AutoModelForTokenClassification.from_pretrained(NER_MODEL_NAME)
+                _ner_pipeline = pipeline(
+                    "ner", model=model, tokenizer=tokenizer,
+                    aggregation_strategy="simple", device=device,
+                )
+            else:
+                _ner_pipeline = pipeline(
+                    "ner", model=NER_MODEL_NAME,
+                    aggregation_strategy="simple", device=device,
+                )
+        except Exception:
+            logger.exception("Configured NER model failed to load; using multilingual fallback.")
+            if os.path.isdir(NER_MODEL_NAME):
+                _ner_pipeline = pipeline(
+                    "ner", model="Babelscape/wikineural-multilingual-ner",
+                    aggregation_strategy="simple", device=device,
+                )
+            else:
+                raise
     return _ner_pipeline
 
 
@@ -307,8 +330,7 @@ def process_nlp_batch() -> bool:
         articles = db.query(Article).filter(
             Article.clean_text.isnot(None),
             Article.clean_text != "",
-            Article.processing_status == "embedded",
-            Article.named_entities.is_(None),
+            Article.processing_status.in_(["eligible", "extracted", "pending", "embedded"]),
         ).limit(NER_BATCH_SIZE).all()
 
         if not articles:
@@ -322,11 +344,17 @@ def process_nlp_batch() -> bool:
 
         for article in articles:
             lang = article.language if article.language in ("en", "ta") else "ta"
-            norm_text = normalize_text(article.clean_text)
+            _, body = parse_clean_article(article.clean_text, article.title)
+            norm_text = normalize_text(body)
             sentences = segment_sentences(norm_text)
-            target_sentences = sentences[:MAX_SENTENCES]
+            target_sentences = sentences[:MAX_SENTENCES] if MAX_SENTENCES > 0 else sentences
 
             entities = defaultdict(list)
+            # Keep extracted dateline/footer locations even if the model misses them.
+            if article.named_entities:
+                for location in article.named_entities.get("LOCATION", []):
+                    if location and location not in entities["LOCATION"]:
+                        entities["LOCATION"].append(location)
 
             if target_sentences:
                 results = ner(target_sentences)
@@ -346,7 +374,7 @@ def process_nlp_batch() -> bool:
                             mapped_group = 'ORGANIZATION'
                         elif group in ('LOC', 'LOCATION', 'B-LOCATION', 'I-LOCATION'):
                             mapped_group = 'LOCATION'
-                        elif group in ('MISC', 'EVENT', 'B-EVENT', 'I-EVENT'):
+                        elif group in ('EVENT', 'B-EVENT', 'I-EVENT'):
                             mapped_group = 'EVENT'
 
                         if mapped_group:

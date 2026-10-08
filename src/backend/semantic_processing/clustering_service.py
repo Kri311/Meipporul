@@ -12,12 +12,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from backend.models.database import (
     SessionLocal, Article, NewsCluster, ClusteringRun, ArticleCluster
 )
+from backend.ingestion.tasks.text_cleaning import parse_clean_article
 
 # Configuration
 DBSCAN_EPS = float(os.getenv("DBSCAN_EPS", "0.15"))           # cosine distance threshold
 DBSCAN_MIN_SAMPLES = int(os.getenv("DBSCAN_MIN_SAMPLES", "2"))
 AGGLO_DISTANCE_THRESHOLD = float(os.getenv("AGGLO_DISTANCE_THRESHOLD", "0.15"))
-EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "Tamil-ai/tamil-embed-base")
+CLUSTER_MAX_GAP_DAYS = int(os.getenv("CLUSTER_MAX_GAP_DAYS", "14"))
+CLUSTER_MAX_ARTICLES = int(os.getenv("CLUSTER_MAX_ARTICLES", "50"))
+CLUSTER_MIN_CENTROID_SIMILARITY = float(os.getenv("CLUSTER_MIN_CENTROID_SIMILARITY", "0.80"))
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "intfloat/multilingual-e5-base")
 
 # Logging setup
 log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
@@ -46,6 +50,83 @@ class ClusteringService:
         if norm > 0:
             centroid = centroid / norm
         return centroid
+
+    @staticmethod
+    def _entity_aware_distances(articles: List[Any], embeddings: np.ndarray) -> np.ndarray:
+        """Use semantic similarity as the main signal; entities only break close ties."""
+        distances = cosine_distances(embeddings)
+        entity_sets = []
+        for article in articles:
+            values = set()
+            if getattr(article, "linked_entities", None):
+                for group, entities in article.linked_entities.items():
+                    if group.upper() not in {"PERSON", "ORG", "ORGANIZATION", "GPE", "LOCATION"}:
+                        continue
+                    for entity in entities or []:
+                        value = entity.get("kg_id") or entity.get("canonical_en") or entity.get("canonical_ta") or entity.get("text")
+                        if value:
+                            values.add(f"{group}:{str(value).casefold()}")
+            if getattr(article, "named_entities", None):
+                for group, entities in article.named_entities.items():
+                    if group.upper() not in {"PERSON", "ORG", "ORGANIZATION", "GPE"}:
+                        continue
+                    for entity in entities or []:
+                        if isinstance(entity, str):
+                            values.add(f"{group}:{entity.casefold()}")
+            entity_sets.append(values)
+        for left in range(len(articles)):
+            for right in range(left + 1, len(articles)):
+                left_date = articles[left].published_at
+                right_date = articles[right].published_at
+                left_lang = str(getattr(articles[left], "language", "") or "").lower().split("-")[0]
+                right_lang = str(getattr(articles[right], "language", "") or "").lower().split("-")[0]
+                if left_lang and right_lang and left_lang != right_lang:
+                    distances[left, right] = distances[right, left] = 1.0
+                    continue
+                if left_date and right_date and abs((left_date - right_date).days) > CLUSTER_MAX_GAP_DAYS:
+                    distances[left, right] = distances[right, left] = 1.0
+                    continue
+                # Shared names must never merge unrelated events on their own.
+                # Only grant a small tie-break when the article pair is already
+                # semantically close; location-only overlap is intentionally ignored.
+                shared = entity_sets[left].intersection(entity_sets[right])
+                if shared and distances[left, right] <= 0.20:
+                    distances[left, right] = distances[right, left] = max(0.0, distances[left, right] - 0.02)
+        return distances
+
+    def _split_chained_clusters(self, labels: np.ndarray, articles: List[Any], embeddings: np.ndarray) -> np.ndarray:
+        """Break DBSCAN single-link chains by fixed time span and centroid cohesion."""
+        refined = np.full(len(labels), -1, dtype=int)
+        next_label = max((int(label) for label in labels if label >= 0), default=-1) + 1
+        for original in sorted(set(int(label) for label in labels if label >= 0)):
+            indices = [i for i, label in enumerate(labels) if int(label) == original]
+            indices.sort(key=lambda i: (articles[i].published_at.timestamp() if articles[i].published_at else 0, articles[i].id or i))
+            groups, current = [], []
+            anchor_date = None
+            for idx in indices:
+                published = articles[idx].published_at
+                exceeds_span = bool(current and published and anchor_date and
+                                    (published - anchor_date).days > CLUSTER_MAX_GAP_DAYS)
+                exceeds_size = len(current) >= max(2, CLUSTER_MAX_ARTICLES)
+                loses_cohesion = bool(current and float(np.dot(
+                    self._compute_centroid(embeddings[current]), embeddings[idx]
+                )) < CLUSTER_MIN_CENTROID_SIMILARITY)
+                if current and (exceeds_span or exceeds_size or loses_cohesion):
+                    groups.append(current)
+                    current, anchor_date = [], None
+                if not current:
+                    anchor_date = published
+                current.append(idx)
+            if current:
+                groups.append(current)
+            for group in groups:
+                if len(group) < 2:
+                    continue
+                assigned = original if len(groups) == 1 else next_label
+                if len(groups) > 1:
+                    next_label += 1
+                refined[group] = assigned
+        return refined
     
     def _save_results(self, db: Any, labels: np.ndarray, articles: List[Any], 
                       embeddings: np.ndarray, run: Any, algorithm: str) -> Tuple[int, int]:
@@ -54,6 +135,16 @@ class ClusteringService:
         unique_labels.discard(-1)  # -1 = noise in DBSCAN
         
         cluster_map = {}  # local_label -> NewsCluster.id
+        existing = db.query(NewsCluster).filter(
+            NewsCluster.algorithm == algorithm,
+            NewsCluster.embedding_model_version == EMBEDDING_MODEL_NAME,
+            NewsCluster.centroid_embedding.isnot(None),
+        ).all()
+        used_existing = set()
+        # The run covers the complete embedded corpus, so discard stale direct
+        # assignments for noise points and groups that moved.
+        for article in articles:
+            article.cluster_id = None
         
         for label in sorted(unique_labels):
             # Find articles in this cluster
@@ -63,18 +154,38 @@ class ClusteringService:
             
             representative_article = articles[member_indices[0]]
             
-            cluster = NewsCluster(
-                representative_title=representative_article.title,
-                cluster_key=f"{algorithm}_run{run.id}_cluster{label}",
-                label=None,  # to be filled by topic_modeling later
-                algorithm=algorithm,
-                algorithm_version="1.0",
-                embedding_model_version=EMBEDDING_MODEL_NAME,
-                article_count=len(member_indices),
-                centroid_embedding=centroid.tolist(),
-            )
-            db.add(cluster)
-            db.flush()
+            # Reuse the closest prior event centroid when the new group is still
+            # semantically the same event; this prevents a fresh event ID on every
+            # daemon cycle when the full corpus is reclustered.
+            best = None
+            best_similarity = 0.82
+            for candidate in existing:
+                if candidate.id in used_existing:
+                    continue
+                old_centroid = np.asarray(candidate.centroid_embedding, dtype=float)
+                similarity = float(np.dot(centroid, old_centroid))
+                if similarity > best_similarity:
+                    best, best_similarity = candidate, similarity
+            if best is None:
+                cluster = NewsCluster(
+                    representative_title=representative_article.title,
+                    cluster_key=f"{algorithm}_event_{run.id}_{label}",
+                    label=None,
+                    algorithm=algorithm,
+                    algorithm_version="2.0",
+                    embedding_model_version=EMBEDDING_MODEL_NAME,
+                    article_count=len(member_indices),
+                    centroid_embedding=centroid.tolist(),
+                )
+                db.add(cluster)
+                db.flush()
+            else:
+                cluster = best
+                used_existing.add(cluster.id)
+                cluster.centroid_embedding = centroid.tolist()
+                cluster.article_count = len(member_indices)
+                cluster.updated_at = datetime.utcnow()
+                cluster.representative_title = representative_article.title
             cluster_map[label] = cluster.id
         
         # Save article-cluster assignments
@@ -103,6 +214,9 @@ class ClusteringService:
             db.add(ac)
         
         # Update run metadata
+        for cluster in existing:
+            if cluster.id not in used_existing:
+                cluster.article_count = 0
         run.num_clusters = len(unique_labels)
         run.num_noise = noise_count
         
@@ -127,10 +241,11 @@ class ClusteringService:
             
             # Compute cosine distance matrix
             start = time.time()
-            distance_matrix = cosine_distances(embeddings)
+            distance_matrix = self._entity_aware_distances(articles, embeddings)
             
             clusterer = DBSCAN(eps=eps, min_samples=min_samples, metric='precomputed')
             labels = clusterer.fit_predict(distance_matrix)
+            labels = self._split_chained_clusters(labels, articles, embeddings)
             elapsed = time.time() - start
             
             # Create clustering run record
@@ -173,7 +288,7 @@ class ClusteringService:
             embeddings = np.array([a.embedding for a in articles])
             
             start = time.time()
-            distance_matrix = cosine_distances(embeddings)
+            distance_matrix = self._entity_aware_distances(articles, embeddings)
             
             clusterer = AgglomerativeClustering(
                 n_clusters=None,
@@ -208,12 +323,11 @@ class ClusteringService:
             db.close()
     
     def run_all(self) -> Tuple[Optional[Any], Optional[Any]]:
-        """Run all clustering algorithms sequentially."""
+        """Run one event clustering algorithm; avoid publishing duplicate event sets."""
         logger.info("Starting clustering pipeline...")
         dbscan_run = self.run_dbscan()
-        agglo_run = self.run_agglomerative()
         logger.info("Clustering pipeline complete.")
-        return dbscan_run, agglo_run
+        return dbscan_run, None
 
 
 def run_clustering_pipeline() -> None:

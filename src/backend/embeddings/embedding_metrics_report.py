@@ -342,7 +342,7 @@ def format_report(
 
     lines.append("")
     lines.append("  Confusion Matrix:")
-    header = f"  {'True\\Pred':<10}" + "".join(f" {cls:>8}" for cls in lang_metrics["classes"])
+    header = f"  {'True/Pred':<10}" + "".join(f" {cls:>8}" for cls in lang_metrics["classes"])
     lines.append(header)
     for true_cls in lang_metrics["classes"]:
         row = f"  {true_cls:<10}"
@@ -377,7 +377,7 @@ def format_report(
 
     lines.append("")
     lines.append("  Confusion Matrix:")
-    header = f"  {'True\\Pred':<10}" + "".join(f" {cls:>8}" for cls in orient_metrics["classes"])
+    header = f"  {'True/Pred':<10}" + "".join(f" {cls:>8}" for cls in orient_metrics["classes"])
     lines.append(header)
     for true_cls in orient_metrics["classes"]:
         row = f"  {true_cls:<10}"

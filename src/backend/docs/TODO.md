@@ -1,17 +1,43 @@
-## TODO
-[] fine tune NER in order to gather proper elements from Tamil news
-[] automate feed fetch -> {deduplication, fetch news on desired topics, remove html parsing, remove emojis, advertisements, english text on tamil outlet} -> {fetch topic, vector embeddings, NER, cluster_id, event representation from NER} -> csv file
+# Pipeline status and next steps
 
-- vector embeddings, NER, cluster with NER, summarization
+The intended current contract and run commands are documented in the
+repository README and ARTICLE_REPROCESSING.md. This list tracks remaining work;
+it is not a claim that model quality has already been validated.
 
-### NLP pipeline
+## Implemented in the current pipeline
 
-- problem statement: NER entities are low in quality and most of them aren't detected properly
-- aim: develop a pipeline which removes all the newline & whitespaces in bw text, removes tamil morphology (word with suffixes) and give just root word, remove designation in bw the entities, mismatch of NER entities
-- so we'll develop a pipeline, which contains finetuned NER model for both tamil & english text. take use of ML prediction Gazetteers (Dictionaries) and context rules to guarantee a sure hit on NER entities and extract appropriate precision, recall, F1 score and macros scores also
-- for tamil morphology - use indic-nlp-library or thamizhi-morph to extract root word before checking with Gazetters
-- dont use ML part to predict dates
-- Extract Person, Organization, Location, and Event using the ML model. Extract Date purely using Regex and Rule-based parsers (like Python's dateparser).
-- okay let us implement this NLP pipeline in nlp/ directory.
-we'll take existing base model for the NER for both tamil and english
-implement the pipeline with ML prediction + gazzetteers + context rules and get the appropriate results metrics as discussed for both tamil and english
+- Shared Trafilatura article extraction and junk cleanup for RSS and historical
+  reprocessing.
+- Separate headline/description/body fields; clean_text is JSON, not a
+  hand-built quoted string.
+- Tamil-oriented English-sentence filtering and party acronym normalization.
+- Location capture from datelines/TOI footers for NER.
+- Multilingual 768-dimensional embedding configuration and parsed body input.
+- English and Tamil source-grounded extractive event summary modules.
+- Language-filtered event API responses and matching frontend lanes.
+
+## Still required
+
+- Evaluate NER precision/recall separately on reviewed Tamil and English sets;
+  repair training labels and gazetteers based on measured errors.
+- Add repeatable tests for the full 21-column CSV schema, scraper-cleaner
+  fixtures per outlet, Tamil script purity, JSON quoting, and API language
+  separation.
+- Evaluate the current centroid reuse and 30-day maximum date-gap defaults;
+  measure false merges/splits and tune against reviewed event timelines.
+- Replace placeholder/legacy metadata model labels with values read from
+  runtime configuration.
+- Review all enabled source URLs and their allowed fetch cadence.
+- Validate summary factuality and coverage with editors in both languages.
+
+## Runtime sequence
+
+1. Fetch and extract RSS articles.
+2. Run NER on article body text and retain extracted dateline locations.
+3. Generate/update embeddings from the headline plus parsed body.
+4. Cluster semantically related coverage and assign topics.
+5. Generate native-language event summaries and export enriched CSV data.
+
+Sentence embeddings are not machine translation. Current language views retain
+the original article language; any cross-language article translation requires
+a separately specified translation workflow and quality review.

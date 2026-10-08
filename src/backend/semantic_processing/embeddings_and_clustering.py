@@ -38,7 +38,7 @@ def run_pipeline():
     total_embedded = embedding_svc.process_pending_articles()
     logger.info(f"[Step 1/2] Embedded {total_embedded} articles.")
 
-    # Step 2: Run batch clustering (DBSCAN + Agglomerative)
+    # Step 2: Run stable DBSCAN event clustering (entity-aware distances)
     if total_embedded > 0:
         logger.info("[Step 2/2] Running batch clustering...")
         clustering_svc = ClusteringService()

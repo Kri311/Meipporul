@@ -19,13 +19,65 @@ from backend.ingestion.tasks.text_cleaning import (
     SKIP_KEYWORDS, FESTIVAL_KEYWORDS, BREAKING_NEWS_KEYWORDS,
     classify_topic, apply_outlet_cleaners,
     normalize_political_parties,
-    extract_dateline_location
+    extract_dateline_location, clean_article_title, clean_article_body,
+    format_clean_article, build_article_description, is_usable_article_body,
 )
+
+CSV_FIELDNAMES = [
+    "content_hash", "guid", "outlet_slug", "title", "description", "author",
+    "published_at", "language", "article_length", "data_fetch_via",
+    "canonical_url", "extraction_method", "extraction_quality",
+    "processing_status", "raw_text", "clean_text", "topic", "cluster_id",
+    "semantic_text_hash", "named_entities", "embedding",
+]
 
 
 def normalize_str(s):
     s = normalize_political_parties(s)
     return re.sub(r'[^a-zA-Z0-9஀-௿]', '', s).lower()
+
+
+def extract_entry_image(entry, page_html=None, page_url=""):
+    """Prefer the linked article's lead image over generic RSS/feed artwork."""
+    def usable(url):
+        if not url:
+            return None
+        absolute = urllib.parse.urljoin(page_url, str(url).strip())
+        parsed = urllib.parse.urlparse(absolute)
+        if parsed.scheme not in {"http", "https"}:
+            return None
+        path = parsed.path.casefold()
+        if any(word in path for word in ("logo", "avatar", "icon", "sprite", "placeholder", "default-image")):
+            return None
+        return absolute
+
+    if page_html:
+        soup = BeautifulSoup(page_html, "html.parser")
+        for key in ("og:image", "og:image:url", "twitter:image", "twitter:image:src"):
+            node = soup.find("meta", property=key) or soup.find("meta", attrs={"name": key})
+            if node and usable(node.get("content")):
+                return usable(node.get("content"))
+        image = soup.select_one("article img[src], main img[src]")
+        if image and usable(image.get("src")):
+            return usable(image.get("src"))
+    for field in ("media_content", "media_thumbnail"):
+        for media in getattr(entry, field, []) or []:
+            if usable(media.get("url")):
+                return usable(media.get("url"))
+    for link in getattr(entry, "links", []) or []:
+        if "image" in (link.get("type") or "") and link.get("href"):
+            if usable(link["href"]):
+                return usable(link["href"])
+    for field in ("description", "content"):
+        value = getattr(entry, field, "")
+        if isinstance(value, list):
+            value = value[0].get("value", "") if value else ""
+        soup = BeautifulSoup(value or "", "html.parser")
+        image = soup.find("img", src=True)
+        if image:
+            if usable(image.get("src")):
+                return usable(image.get("src"))
+    return None
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def process_single_feed(self, feed_id: int):
@@ -105,19 +157,20 @@ def process_single_feed(self, feed_id: int):
             if hasattr(entry, 'published_parsed') and entry.published_parsed:
                 pub_date = datetime(*entry.published_parsed[:6])
             elif hasattr(entry, 'published'):
-                        try:
+                try:
                     pub_date = parsedate_to_datetime(entry.published)
                 except Exception:
-                    pub_date = datetime.utcnow()
-            else:
-                pub_date = datetime.utcnow()
+                    pub_date = None
+
+            if not pub_date or pub_date.year != 2026:
+                continue
 
             # Architecture Check: RSS Content vs Trafilatura
             # Most RSS feeds only give a 2-sentence summary in 'description'.
             rss_content_html = ''
-            if hasattr(entry, 'content'):
+            if getattr(entry, 'content', None):
                 rss_content_html = entry.content[0].value
-            elif hasattr(entry, 'description'):
+            elif getattr(entry, 'description', None):
                 rss_content_html = entry.description
                 
             clean_rss_text = clean_html(rss_content_html)
@@ -125,6 +178,7 @@ def process_single_feed(self, feed_id: int):
             final_text = ""
             extraction_method = "rss"
             extraction_quality = 0.0
+            downloaded = None
             
             # If the RSS text is less than 500 chars, it's a snippet. We must scrape the URL.
             if True:
@@ -140,15 +194,18 @@ def process_single_feed(self, feed_id: int):
 
                 if downloaded:
                     # Extract main article body (removes headers, footers, sidebars)
-                    extracted_text = trafilatura.extract(downloaded, favor_recall=True)
+                    extracted_text = trafilatura.extract(
+                        downloaded, favor_recall=True, include_comments=False,
+                        include_tables=False
+                    )
                     
-                    if len(clean_rss_text) < 50 and extracted_text:
-                        rss_content_html = extracted_text
-                        
                     if extracted_text and len(extracted_text) > 10:
+                        rss_content_html = extracted_text
                         final_text = deep_clean_text(extracted_text)
                         extraction_method = "trafilatura"
                         extraction_quality = 0.9 # High confidence full article
+
+            image_url = extract_entry_image(entry, downloaded, canonical_url)
             
             # Fallback to RSS text if Trafilatura fails or if RSS had the full text (>500 chars)
             if not final_text:
@@ -160,15 +217,9 @@ def process_single_feed(self, feed_id: int):
                 feed_run.entries_failed += 1
                 continue
                 
-            # Hash to detect content changes later
-            content_hash = hashlib.sha256(final_text.encode('utf-8')).hexdigest() if final_text else None
-            
-            # Auto-detect language from actual content (unified timeline)
-            detected_lang = detect_language(final_text)
-            
             # Apply per-outlet cleaners and classify topic
             loc, final_text = extract_dateline_location(final_text)
-            title_clean, final_text = apply_outlet_cleaners(clean_html(title), final_text, outlet_slug, canonical_url)
+            title_clean, final_text = apply_outlet_cleaners(clean_article_title(title), final_text, outlet_slug, canonical_url)
             
             # Remove title duplication from body using a smarter line-by-line check BEFORE collapsing newlines
                 
@@ -189,10 +240,15 @@ def process_single_feed(self, feed_id: int):
 
             # Remove any internal newlines in the body so it's a single continuous block
             # Convert newlines (and any following whitespaces) into a single whitespace
-            final_text = re.sub(r'\n+\s*', ' ', final_text).strip()
+            final_text = clean_article_body(final_text, title_clean)
+            if not is_usable_article_body(final_text):
+                feed_run.entries_failed += 1
+                continue
+            content_hash = hashlib.sha256(final_text.encode("utf-8")).hexdigest()
+            detected_lang = detect_language(final_text)
+            title_clean = normalize_political_parties(title_clean, detected_lang)
 
             # STANDARD: Ensure content explicitly begins with the Title followed by the Body
-            final_text = f"{title_clean}\n\n{final_text}"
             
             topic = classify_topic(title_clean, final_text, outlet_slug, location=loc)
             
@@ -206,11 +262,10 @@ def process_single_feed(self, feed_id: int):
                 article_length_cat = "long"
             
             data_fetch_via = "Google News RSS" if "news.google.com" in feed.feed_url else "Native RSS"
-            
-            t_clean = re.sub(r"\s+", " ", title_clean).strip() if title_clean else ""
-            c_clean = re.sub(r"\s+", " ", final_text).strip() if final_text else ""
-            formatted_clean_text = json.dumps({t_clean: c_clean}, ensure_ascii=False, separators=(',', ':'))
-
+            d_clean = build_article_description(
+                getattr(entry, "description", ""), final_text, title_clean
+            )
+            formatted_clean_text = format_clean_article(title_clean, final_text)
             article = Article(
                 outlet_id=feed.outlet_id,
                 rss_feed_id=feed.id,
@@ -218,8 +273,9 @@ def process_single_feed(self, feed_id: int):
                 canonical_url=canonical_url,
                 original_url=original_url,
                 title=title_clean,
-                description=clean_html(getattr(entry, 'description', '')),
+                description=d_clean,
                 author=getattr(entry, 'author', ''),
+                image_url=image_url,
                 published_at=pub_date,
                 language=detected_lang,
                 article_length=article_length_cat,
@@ -230,10 +286,11 @@ def process_single_feed(self, feed_id: int):
                 extraction_method=extraction_method,
                 extraction_quality=extraction_quality,
                 processing_status="eligible",
+                named_entities={"LOCATION": [loc]} if loc else {},
             )
             
             db.add(article)
-                    try:
+            try:
                 db.commit() # Commit per article to avoid losing progress if one fails
                 feed_run.entries_new += 1
             except Exception as commit_err:
@@ -247,10 +304,15 @@ def process_single_feed(self, feed_id: int):
             
             csv_path = os.path.join(csv_dir, "raw_processed.csv")
             
-            file_exists = os.path.exists(csv_path)
+            file_exists = os.path.exists(csv_path) and os.path.getsize(csv_path) > 0
             with open(csv_path, "a", newline="", encoding="utf-8-sig") as csvfile:
-                fieldnames = ["content_hash", "guid", "outlet_slug", "title", "description", "author", "published_at", "language", "article_length", "data_fetch_via", "canonical_url", "extraction_method", "extraction_quality", "processing_status", "raw_text", "clean_text", "topic"]
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                fieldnames = CSV_FIELDNAMES
+                if file_exists:
+                    with open(csv_path, "r", encoding="utf-8-sig", newline="") as existing_csv:
+                        existing_header = next(csv.reader(existing_csv), [])
+                    if existing_header:
+                        fieldnames = existing_header
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
                 if not file_exists:
                     writer.writeheader()
                 writer.writerow({
@@ -270,7 +332,11 @@ def process_single_feed(self, feed_id: int):
                     "processing_status": "eligible",
                     "raw_text": rss_content_html,
                     "clean_text": formatted_clean_text,
-                    "topic": topic
+                    "topic": topic,
+                    "cluster_id": "",
+                    "semantic_text_hash": "",
+                    "named_entities": json.dumps({"LOCATION": [loc]} if loc else {}, ensure_ascii=False),
+                    "embedding": "",
                 })
             # -------------------
 

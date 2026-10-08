@@ -2,12 +2,14 @@ import os
 import sys
 import time
 import hashlib
+import re
 from datetime import datetime
 import numpy as np
 import logging
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from backend.models.database import SessionLocal, Article
+from backend.ingestion.tasks.text_cleaning import parse_clean_article
 
 log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
 os.makedirs(log_dir, exist_ok=True)
@@ -19,10 +21,10 @@ logging.basicConfig(
 logger = logging.getLogger("EmbeddingService")
 
 # Configuration
-EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "Tamil-ai/tamil-embed-base")
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "intfloat/multilingual-e5-base")
 EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 EMBEDDING_DIM = 768
-MAX_TEXT_LENGTH = 3000
+MAX_CHUNK_CHARS = 1800
 
 class EmbeddingService:
     """Handles article embedding generation with text hashing and metadata tracking."""
@@ -42,11 +44,39 @@ class EmbeddingService:
     
     @staticmethod
     def generate_semantic_text(article) -> str:
-        """Build the text to embed: title + clean_text, truncated."""
-        title = (article.title or "").strip()
-        body = (article.clean_text or "").strip()
-        text = f"{title} {body}".strip()
-        return text[:MAX_TEXT_LENGTH]
+        """Build a source-language E5 passage from headline and body, never JSON."""
+        title, body = parse_clean_article(article.clean_text, article.title)
+        title = (article.title or title).strip()
+        text = " ".join(part for part in (title, body) if part).strip()
+        return f"passage: {text}"
+
+    @staticmethod
+    def _chunk_passage(text: str) -> list:
+        """Split long articles at sentence/word boundaries so every part contributes."""
+        prefix = "passage: "
+        body = text[len(prefix):] if text.startswith(prefix) else text
+        sentences = re.split(r"(?<=[.!?।])\s+", body)
+        chunks, current = [], ""
+        for sentence in sentences:
+            words = sentence.split()
+            pieces, piece = [], ""
+            for word in words:
+                if piece and len(piece) + len(word) + 1 > MAX_CHUNK_CHARS:
+                    pieces.append(piece)
+                    piece = word
+                else:
+                    piece = f"{piece} {word}".strip()
+            if piece:
+                pieces.append(piece)
+            for part in pieces:
+                if current and len(current) + len(part) + 1 > MAX_CHUNK_CHARS:
+                    chunks.append(prefix + current)
+                    current = part
+                else:
+                    current = f"{current} {part}".strip()
+        if current:
+            chunks.append(prefix + current)
+        return chunks or [text]
     
     @staticmethod
     def compute_text_hash(text: str) -> str:
@@ -64,34 +94,48 @@ class EmbeddingService:
     def embed_batch(self, texts: list) -> np.ndarray:
         """Generate normalized embeddings for a batch of texts."""
         model = self._get_model()
-        embeddings = model.encode(
-            texts, 
+        chunk_groups = [self._chunk_passage(text) for text in texts]
+        flat_chunks = [chunk for group in chunk_groups for chunk in group]
+        chunk_embeddings = model.encode(
+            flat_chunks,
             batch_size=EMBEDDING_BATCH_SIZE, 
             normalize_embeddings=True,
             show_progress_bar=False
         )
-        return embeddings
+        article_embeddings = []
+        offset = 0
+        for group in chunk_groups:
+            vectors = chunk_embeddings[offset:offset + len(group)]
+            offset += len(group)
+            mean_vector = np.mean(vectors, axis=0)
+            norm = np.linalg.norm(mean_vector)
+            article_embeddings.append(mean_vector / norm if norm else mean_vector)
+        return np.asarray(article_embeddings)
     
     def process_pending_articles(self, limit: int = None) -> int:
         """Process all pending articles that need embedding."""
         db = SessionLocal()
         total_embedded = 0
+        last_seen_id = 0
         try:
             while True:
+                if limit is not None and total_embedded >= limit:
+                    break
                 # Find articles needing embedding
                 query = db.query(Article).filter(
                     Article.clean_text.isnot(None),
                     Article.clean_text != "",
-                    Article.embedding.is_(None)
-                ).filter(
-                    Article.processing_status.in_(["extracted", "eligible", "pending"])
+                    Article.id > last_seen_id,
                 )
-                
                 batch_limit = min(limit - total_embedded, EMBEDDING_BATCH_SIZE) if limit else EMBEDDING_BATCH_SIZE
-                articles = query.limit(batch_limit).all()
-                
-                if not articles:
+                page = query.order_by(Article.id).limit(500).all()
+                if not page:
                     break
+                last_seen_id = page[-1].id
+                articles = [a for a in page if self.needs_reembedding(a)][:batch_limit]
+
+                if not articles:
+                    continue
                 
                 texts = []
                 hashes = []

@@ -1,36 +1,31 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Veritas Lens web client
 
-## Getting Started
+The Next.js 16 / React 19 app presents event clusters in separate English and
+Tamil lanes. Language selection is passed to the API and retained when opening
+an event. The API returns native-language articles only; the UI does not claim
+that sentence embeddings are translations.
 
-First, run the development server:
+## Start
+
+From this directory:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The default web URL is http://localhost:3000. Start the FastAPI service
+separately from the repository root (see the root README).
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+## API configuration
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The frontend API client is src/lib/api.js. Set NEXT_PUBLIC_API_URL in the
+frontend environment when the API is not at its configured local default.
 
-## Learn More
+## Main routes
 
-To learn more about Next.js, take a look at the following resources:
+- /?lang=en and /?lang=ta: language-specific event overview.
+- /events/{id}?lang=en|ta: event summary, source timeline, and entities for the
+  selected language.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The App Router page props are promises in this installed Next.js version;
+follow the local Next.js API reference when changing route components.

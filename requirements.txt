@@ -5,11 +5,13 @@ trafilatura==1.6.3     # Extracting actual article content from URLs (the fallba
 SQLAlchemy==2.0.25     # DB ORM
 psycopg2-binary==2.9.9 # Postgres driver
 pgvector==0.2.4        # PostgreSQL vector extension support for SQLAlchemy
-pydantic==2.5.3        # Data validation and settings management
+pydantic>=2.9,<3.0     # FastAPI 0.142.x requires Pydantic 2.9+
 PyYAML==6.0.1          # Reading sources.yaml
 requests==2.31.0       # Making HTTP requests
 beautifulsoup4==4.12.3 # HTML parsing (fallback/helpers)
 pytest==8.0.0
 sentence-transformers==5.2.3
+transformers>=4.45,<5.0   # Seq2seq summarization and NER fine-tuning
 torch==2.2.1           # PyTorch (will use default PyPI wheels bundled with CUDA)
 numpy<2.0.0
+matplotlib>=3.8,<4.0

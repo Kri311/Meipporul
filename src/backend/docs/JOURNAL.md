@@ -1,5 +1,11 @@
 # Veritas Lens — Master Development Journal
 
+> **Current implementation note (2026-10-08):** This journal is a historical
+> research and decision log, not an authoritative description of runtime
+> behavior. For the current 21-column export contract and run instructions,
+> see the repository README and ARTICLE_REPROCESSING.md. The active embedding
+> default and language-view policy may differ from older experiments below.
+
 > **Project type:** Production-oriented Tamil + English news intelligence platform
 >
 > **Core idea:** Aggregate Tamil news from major outlets, preserve the original reporting, group articles covering the same real-world event, show publisher-level political orientation as a *source provenance signal*, compare how different outlets frame the same event, and surface coverage gaps / blind spots.

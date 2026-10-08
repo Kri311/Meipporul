@@ -56,7 +56,7 @@ export default function Header({ lang = 'en', activePage = 'home', selectedTag =
             whiteSpace: 'nowrap',
           }}
         >
-          PERSPECTIVE LENS
+          VERITAS LENS
         </Link>
 
         <div

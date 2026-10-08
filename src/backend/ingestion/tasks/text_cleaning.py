@@ -17,28 +17,185 @@ import re
 import urllib.parse
 import requests
 from bs4 import BeautifulSoup
+import html
+import json
+from difflib import SequenceMatcher
 
 
 def clean_html(raw_html):
-    """Removes HTML tags and normalizes whitespace."""
-    if not raw_html:
-        return ""
-    raw_html = str(raw_html)
-    # If the input doesn't contain HTML markup, treat it as plain text.
+    if not raw_html: return ""
+    raw_html = html.unescape(str(raw_html))
     if "<" not in raw_html or ">" not in raw_html:
         text = raw_html.strip()
     else:
         soup = BeautifulSoup(raw_html, "html.parser")
         text = soup.get_text(separator="\n").strip()
-    # Strip dateline prefixes
-    text = re.sub(
-        r"^(?:[A-Za-z\s]{3,20}|[\u0B80-\u0BFF\s]{3,20})\s*(?:\||\:\-|\:)\s*","",text).strip()
+    return text.strip()
+
+
+def clean_article_title(title):
+    """Return a plain, single-line title with markup and control characters removed."""
+    title = clean_html(title)
+    return re.sub(r"\s+", " ", title).strip()
+
+
+def clean_article_body(body, title="", language=None):
+    """Clean extracted article text and remove a repeated title at the start."""
+    body = deep_clean_text(body)
+    if not body:
+        return ""
+
+    lines = [re.sub(r"\s+", " ", line).strip() for line in body.splitlines()]
+    while lines and not lines[0]:
+        lines.pop(0)
+    if lines:
+        # Some wire headlines/taxonomy labels are prepended to the article by
+        # the source template (e.g. "- Rape:"). They are metadata, not prose.
+        lines[0] = re.sub(
+            r"(?i)^\s*[-–—]?\s*(?:rape|crime|politics|sports|business|update|report)\s*:\s*",
+            "",
+            lines[0],
+        ).strip()
+        if not lines[0]:
+            lines.pop(0)
+    token_pattern = re.compile(r"[\w\u0B80-\u0BFF]+", flags=re.UNICODE)
+    title_tokens = [match.group(0).casefold() for match in token_pattern.finditer(title or "")]
+    while lines and title_tokens:
+        first_matches = list(token_pattern.finditer(lines[0]))
+        first_tokens = [match.group(0).casefold() for match in first_matches]
+        prefix_tokens = first_tokens[:len(title_tokens)]
+        prefix_score = SequenceMatcher(None, " ".join(title_tokens), " ".join(prefix_tokens)).ratio()
+        exact = prefix_tokens == title_tokens
+        if exact or (len(title_tokens) >= 3 and prefix_score >= 0.84):
+            if len(first_tokens) > len(title_tokens):
+                remainder = lines[0][first_matches[len(title_tokens) - 1].end():].lstrip(" \t:|–—-.,")
+                if remainder:
+                    lines[0] = remainder
+                    break
+            lines.pop(0)
+            while lines and not lines[0]:
+                lines.pop(0)
+        else:
+            break
+    body = "\n".join(lines).strip()
+    if language not in {"en", "ta"}:
+        language = detect_language(body)
+        if language == "mixed":
+            tamil_chars = len(re.findall(r"[\u0B80-\u0BFF]", body))
+            latin_chars = len(re.findall(r"[A-Za-z]", body))
+            language = "ta" if tamil_chars > latin_chars else "en"
+    body = filter_language_sentences(body, language)
+    body = re.sub(r"\s+", " ", body).strip()
+    # Trafilatura occasionally retains an outlet's literal teaser marker at the
+    # end of an otherwise complete article. Keep the article text, not the UI
+    # prompt that invites readers to expand it.
+    body = re.sub(r"(?:\s*\.{3}|\s*…)+\s*$", "", body).strip()
+    # Normalize common Indian-rupee spellings without changing the amount.
+    body = re.sub(r"(?i)\bRs\.?\s*(?=\d)", "Rs. ", body)
+    # Trafilatura and RSS snippets sometimes start with separators or stray
+    # punctuation left behind by a removed dateline/headline. Keep the first
+    # actual letter/number (including Tamil) as the beginning of the article.
+    body = re.sub(r"^[\s\W_]+", "", body, flags=re.UNICODE).strip()
+    return normalize_political_parties(body, language)
+
+
+def format_clean_article(title, body):
+    """Encode the required {title: content} shape as valid JSON."""
+    return json.dumps({clean_article_title(title): body}, ensure_ascii=False, separators=(",", ":"))
+
+
+def build_article_description(description, body, title="", max_length=300):
+    """Keep the supplied description, or derive a short lead from the article."""
+    description = clean_html(description)
+    if description:
+        return description
+    body = clean_article_body(body, title)
+    if not body:
+        return ""
+    lead = re.split(r"(?<=[.!?।])\s+", body, maxsplit=1)[0].strip()
+    if len(lead) > max_length:
+        lead = lead[:max_length].rsplit(" ", 1)[0].rstrip(" ,;:-")
+    return lead
+
+
+def parse_clean_article(value, fallback_title=""):
+    """Read the canonical {title: body} JSON while accepting legacy plain text."""
+    if not value:
+        return clean_article_title(fallback_title), ""
+    try:
+        payload = json.loads(value) if isinstance(value, str) else value
+        if isinstance(payload, dict) and payload:
+            title, body = next(iter(payload.items()))
+            return clean_article_title(title or fallback_title), str(body or "").strip()
+    except (ValueError, TypeError):
+        pass
+    return clean_article_title(fallback_title), str(value).strip()
+
+
+PARTY_TAMIL = {
+    "DMK": "திமுக", "AIADMK": "அதிமுக", "BJP": "பாஜக", "TVK": "தவெக",
+    "PMK": "பாமக", "DMDK": "தேமுதிக", "NTK": "நாதக", "VCK": "விசிக",
+    "MDMK": "மதிமுக", "CPI": "சிபிஐ", "CPM": "சிபிஎம்", "AMMK": "அமமுக",
+    "INC": "காங்கிரஸ்", "AAP": "ஆம் ஆத்மி", "TMC": "தமாகா", "MNM": "மநீம",
+}
+
+
+def normalize_political_parties(text, language="en"):
+    """Normalize party aliases without converting a Tamil article into English."""
+    if not text:
+        return ""
+    en_to_ta = {
+        "DMK": (r"(?i)\bD\.?M\.?K\.?\b", r"(?i)திராவிட\s*முன்னேற்றக்\s*கழகம்"),
+        "AIADMK": (r"(?i)\bA\.?I\.?A\.?D\.?M\.?K\.?\b", r"(?i)அண்ணா\s*திராவிட\s*முன்னேற்றக்\s*கழகம்"),
+        "BJP": (r"(?i)\bB\.?J\.?P\.?\b", r"(?i)பாரதிய\s*ஜனதா\s*கட்சி"),
+        "TVK": (r"(?i)\bT\.?V\.?K\.?\b", r"(?i)தமிழக\s*வெற்றிக்\s*கழகம்"),
+        "PMK": (r"(?i)\bP\.?M\.?K\.?\b",), "DMDK": (r"(?i)\bD\.?M\.?D\.?K\.?\b",),
+        "NTK": (r"(?i)\bN\.?T\.?K\.?\b",), "VCK": (r"(?i)\bV\.?C\.?K\.?\b",),
+        "MDMK": (r"(?i)\bM\.?D\.?M\.?K\.?\b",), "CPI": (r"(?i)\bC\.?P\.?I\.?\b",),
+        "CPM": (r"(?i)\bC\.?P\.?M\.?\b",), "AMMK": (r"(?i)\bA\.?M\.?M\.?K\.?\b",),
+        "INC": (r"(?i)\bI\.?N\.?C\.?\b",), "AAP": (r"(?i)\bA\.?A\.?P\.?\b",),
+        "TMC": (r"(?i)\bT\.?M\.?C\.?\b",), "MNM": (r"(?i)\bM\.?N\.?M\.?\b",),
+    }
+    tamil_aliases = {
+        "DMK": r"(?i)தி\.?மு\.?க", "AIADMK": r"(?i)அ\.?தி\.?மு\.?க",
+        "BJP": r"(?i)பா\.?ஜ\.?க", "TVK": r"(?i)த\.?வெ\.?க",
+        "PMK": r"(?i)பா\.?ம\.?க", "DMDK": r"(?i)தே\.?மு\.?தி\.?க",
+        "NTK": r"(?i)நா\.?த\.?க", "VCK": r"(?i)வி\.?சி\.?க",
+        "MDMK": r"(?i)ம\.?தி\.?மு\.?க", "CPI": r"(?i)சி\.?பி\.?ஐ", "CPM": r"(?i)சி\.?பி\.?எம்",
+    }
+    if language == "ta":
+        for abbr, patterns in en_to_ta.items():
+            for pattern in patterns:
+                text = re.sub(pattern, PARTY_TAMIL[abbr], text)
+        for abbr, pattern in {
+            "DMK": tamil_aliases["DMK"], "AIADMK": tamil_aliases["AIADMK"],
+            "BJP": tamil_aliases["BJP"], "TVK": tamil_aliases["TVK"],
+            "PMK": tamil_aliases["PMK"], "DMDK": tamil_aliases["DMDK"],
+            "NTK": tamil_aliases["NTK"], "VCK": tamil_aliases["VCK"],
+            "MDMK": tamil_aliases["MDMK"], "CPI": tamil_aliases["CPI"], "CPM": tamil_aliases["CPM"],
+        }.items():
+            text = re.sub(pattern, PARTY_TAMIL[abbr], text)
+        return text
+    for abbr, pattern in tamil_aliases.items():
+        text = re.sub(pattern, abbr, text)
     return text
 
 
-# ─── Paywall / Subscription / Navigation Junk Patterns ───
-# These regex patterns match common non-article boilerplate that
-# leaks through Trafilatura and RSS content extraction.
+def filter_language_sentences(text, language):
+    """Drop sentences written predominantly in the other script, not Latin names/numbers."""
+    if language not in {"ta", "en"}:
+        return text
+    kept = []
+    for sentence in re.split(r"(?<=[.!?।])\s+|\n+", text or ""):
+        tamil = len(re.findall(r"[\u0B80-\u0BFF]", sentence))
+        latin = len(re.findall(r"[A-Za-z]", sentence))
+        if language == "ta" and tamil == 0 and latin >= 12:
+            continue
+        if language == "en" and tamil > 0 and tamil > latin:
+            continue
+        if sentence.strip():
+            kept.append(sentence.strip())
+    return " ".join(kept)
 JUNK_PATTERNS = [
     # Subscription / Paywall prompts
     r"(?i)you are logged in[\s\S]{0,50}loading",
@@ -92,6 +249,7 @@ JUNK_PATTERNS = [
     r"(?i)The Indian Express.*",
     r"(?i)-picture:\d+/?",
     r"(?i)Published by:\w+",
+    r"(?i).*கோப்புப்\s*படம்.*",
     r"(?i)is a Special Correspondent",
 
     # Subscribe / Membership / Newsletter
@@ -140,41 +298,6 @@ MIN_LINE_LENGTH = 15
 
 
 
-def normalize_political_parties(text):
-    PARTY_MAP = {
-        r'(?i)\bதி\.?மு\.?க\b': 'DMK',
-        r'(?i)\bஅ\.?தி\.?மு\.?க\b': 'AIADMK',
-        r'(?i)\bபா\.?ஜ\.?க\b': 'BJP',
-        r'(?i)\bகாங்கிரஸ்\b': 'Congress',
-        r'(?i)\bத\.?வெ\.?க\b': 'TVK',
-        r'(?i)\bபா\.?ம\.?க\b': 'PMK',
-        r'(?i)\bதே\.?மு\.?தி\.?க\b': 'DMDK',
-        r'(?i)\bநா\.?த\.?க\b': 'NTK',
-        r'(?i)\bவி\.?சி\.?க\b': 'VCK',
-        r'(?i)\bம\.?தி\.?மு\.?க\b': 'MDMK',
-        r'(?i)\bசி\.?பி\.?ஐ\b': 'CPI',
-        r'(?i)\bசி\.?பி\.?எம்\b': 'CPM',
-        r'(?i)திராவிட\s*முன்னேற்றக்\s*கழகம்': 'DMK',
-        r'(?i)அண்ணா\s*திராவிட\s*முன்னேற்றக்\s*கழகம்': 'AIADMK',
-        r'(?i)தமிழக\s*வெற்றிக்\s*கழகம்': 'TVK',
-        r'(?i)பாரதிய\s*ஜனதா\s*கட்சி': 'BJP',
-        r'(?i)\bD\.?M\.?K\.?\b': 'DMK',
-        r'(?i)\bA\.?I\.?A\.?D\.?M\.?K\.?\b': 'AIADMK',
-        r'(?i)\bB\.?J\.?P\.?\b': 'BJP',
-        r'(?i)\bT\.?V\.?K\.?\b': 'TVK',
-        r'(?i)\bP\.?M\.?K\.?\b': 'PMK',
-        r'(?i)\bD\.?M\.?D\.?K\.?\b': 'DMDK',
-        r'(?i)\bN\.?T\.?K\.?\b': 'NTK',
-        r'(?i)\bV\.?C\.?K\.?\b': 'VCK',
-        r'(?i)\bM\.?D\.?M\.?K\.?\b': 'MDMK',
-        r'(?i)\bC\.?P\.?I\.?\b': 'CPI',
-        r'(?i)\bC\.?P\.?M\.?\b': 'CPM',
-    }
-    for tamil_pattern, eng_abbr in PARTY_MAP.items():
-        text = re.sub(tamil_pattern, eng_abbr, text)
-    return text
-
-
 NON_LOCATION_PREFIXES = {
     'note', 'update', 'warning', 'report', 'breaking', 'alert', 'live', 'opinion',
     'editorial', 'analysis', 'watch', 'photos', 'video', 'special report',
@@ -189,15 +312,22 @@ def extract_dateline_location(text):
     """
     if not text:
         return '', ''
-    pattern = r'^\s*(?:\[(?P<loc1>[^\]]+)\]|(?P<loc2>[a-zA-Z\u0B80-\u0BFF\s\/,&]{2,50}))\s*(?:\([^\)]+\))?\s*(?::-|\:|\||\-|\u2013|\u2014)\s*'
+    footer = re.search(r"(?i)\bIn\s+([A-Z][A-Za-z .'-]{1,35})\s*\|\s*(?:LPG|CNG)\s+Price[^\n]*$", text)
+    footer_location = footer.group(1).strip() if footer else ""
+    if footer:
+        text = text[:footer.start()].rstrip()
+    label = re.match(r"(?i)^\s*(?:[-–—]\s*)?(?:location|rape|crime|politics|sports|business|update|report)\s*:\s*", text)
+    if label:
+        text = text[label.end():]
+    pattern = r'^\s*(?:\[(?P<loc1>[^\]]+)\]|(?P<loc2>[a-zA-Z\u0B80-\u0BFF][a-zA-Z\u0B80-\u0BFF\s\/,&.-]{1,45}))\s*(?:\([^\)]+\))?\s*(?::-|\:|\||\-|\u2013|\u2014)\s*'
     match = re.match(pattern, text)
     if match:
         raw_loc = (match.group('loc1') or match.group('loc2') or '').strip()
         cleaned_text = text[match.end():].strip()
-        if raw_loc.lower() in NON_LOCATION_PREFIXES:
-            return '', cleaned_text
+        if raw_loc.lower() in NON_LOCATION_PREFIXES or raw_loc.lower() in {"rape", "crime", "politics", "business", "sports"}:
+            return footer_location, cleaned_text
         return raw_loc, cleaned_text
-    return '', text.strip()
+    return footer_location, text.strip()
 
 def deep_clean_text(text):
     """
@@ -223,6 +353,23 @@ def deep_clean_text(text):
     # Trafilatura sometimes glues paywall/subscription text directly
     # to the end of a paragraph without any newline separator.
     INLINE_JUNK = [
+        r"(?i)From live updates to exclusive reports to in-depth explainers.*",
+        r"(?i)Disclaimer: Comments reflect.*",
+        r"(?i)Disclaimer:\s*This story has been[\s\S]*$",
+        r"(?i)Please keep discussions respectful and constructive.*",
+        r"(?i)Abusive, defamatory, or illegal comments will be removed.*",
+        r"(?i)may disable any comment at its discretion.*",
+        r"(?i)By posting, you agree to our Terms of Use and Privacy Policy.*",
+        r"(?i)Comments reflect users views, not s.*",
+        r"(?i)Get Current Updates on India News,\s*Entertainment News,\s*Cricket News\s+along with Latest News and Web Stories from India and around the world\.?\s*$",
+        r"(?i)Published from a wire agency feed without modifications to the text\.?\s*Only the headline has been changed\.?",
+        r"(?i)Get Latest real-time updates[\s\S]*$",
+        r"(?i)Oops!?\s*Looks like you have exceeded the limit to bookmark the image[\s\S]*$",
+        r"(?i)Wait for it\s*[.…]*",
+        r"(?i)Awards and Recognition\s*:[\s\S]*$",
+        r"(?i)\b[A-Z][A-Za-z'’\-]*(?:\s+[A-Z][A-Za-z'’\-]*){1,4}\s+is a journalist who reports and writes on\b[\s\S]*$",
+        r"(?i)\bIn\s+[A-Z][A-Za-z .'-]{1,35}\s*\|\s*(?:LPG|CNG)\s+Price\b[\s\S]*$",
+
         r"You are logged in[\s\S]{0,200}?Loading\.{0,3}",
         r"You don't have any [Aa]ctive [Ss]ubscription[\s\S]{0,500}?[Nn]eed help with your subscription\??",
         r"Subscribed with another email\?[\s\S]{0,200}?[Ll]ogin with that one\.?",
@@ -242,6 +389,7 @@ def deep_clean_text(text):
         r"(?i)For\s*more\s*updates?",
         r"(?i)Subscribe\s*to.*",
         r"(?i)You\s*Can\s*Also\s*Check\s*:.*?(LPG|CNG)\s*Price.*?",
+        r"(?i)You\s*Can\s*Also\s*Check\s*:.*$",
         r"(?i)(பதிவு|மாற்றம்)\s*செய்யப்பட்டது.*",
         r"(?i)Follow\s*us\s*on.*",
         r"(?i)பின்னூட்டத்தில்\s*வெளியாகும்\s*கருத்துகளுக்கு\s*அவற்றைப்\s*பதிவிடுவோரே\s*முழுப்\s*பொறுப்பு[^\n]*",
@@ -284,18 +432,7 @@ def deep_clean_text(text):
     result = "\n".join(cleaned)
     result = re.sub(r'\n{3,}', '\n\n', result)
     
-    # ── Pass 2.5: News Outlet Anonymization ──
-    # Strip common news outlet names from the text to prevent bias in summarization/clustering
-    OUTLET_NAMES = [
-        r"(?i)\b(the\s*hindu|times\s*of\s*india|indian\s*express|ndtv|news18|republic\s*tv|republic|bbc|vikatan|asianet\s*news|oneindia|dinamani|gizbot|mykhel)\b",
-        r"(?i)\b(பிபிசி|விகடன்|நியூஸ்18|தினமணி|ஏசியாநெட்|தி\s*இந்து|என்டிடிவி)\b"
-    ]
-    for outlet_pat in OUTLET_NAMES:
-        result = re.sub(outlet_pat, "", result)
-    
-    # ── Pass 3: Political Entity Normalization ──
-    result = normalize_political_parties(result)
-        
+    # Retain source names and original party forms; language-aware party normalization follows.
     # ── Pass 4: UTF-8 Enforcement & Emoji/Symbol Removal ──
     # Keep only ASCII (English + punctuation) and Tamil Unicode block.
     # This automatically strips emojis and weird symbols.
@@ -328,12 +465,9 @@ def detect_language(text):
     if alpha_chars == 0:
         return "unknown"
     ratio = tamil_chars / alpha_chars
-    if ratio > 0.6:
+    if ratio >= 0.35:
         return "ta"
-    elif ratio < 0.15:
-        return "en"
-    else:
-        return "mixed"
+    return "en"
 
 def get_canonical_url(url):
     """Removes tracking parameters from URLs to prevent duplicate articles. 
@@ -418,33 +552,49 @@ BREAKING_NEWS_KEYWORDS = ['breaking', 'flash', 'alert', 'முக்கிய �
 # ─── Topic Classification & Outlet Cleaners ───
 
 TOPIC_KEYWORDS = {
-    'politics': ['election', 'parliament', 'minister', 'bjp', 'dmk', 'congress', 'aiadmk', 'tvk', 'pmk', 'vck', 'ntk', 'தேர்தல்', 'நாடாளுமன்றம்', 'முதல்வர்', 'அமைச்சர்', 'அரசியல்', 'சட்டமன்றம்', 'எம்.எல்.ஏ'],
-    'world_news': ['international', 'global', 'us', 'china', 'ukraine', 'nato', 'russia', 'israel', 'gaza', 'சர்வதேச', 'உலக', 'அமெரிக்கா', 'சீனா', 'ரஷ்யா', 'இலங்கை'],
-    'economy': ['economy', 'gdp', 'inflation', 'rbi', 'stock market', 'rupee', 'market', 'business', 'பொருளாதாரம்', 'பணவீக்கம்', 'பங்குச்சந்தை', 'ரூபாய்', 'வர்த்தகம்', 'பட்ஜெட்'],
-    'crime_law': ['murder', 'arrest', 'police', 'court', 'fir', 'cbi', 'supreme court', 'high court', 'கொலை', 'கைது', 'காவல்', 'நீதிமன்றம்', 'வழக்கு', 'தீர்ப்பு', 'சிபிஐ', 'போலீஸ்'],
-    'science_health': ['research', 'vaccine', 'who', 'hospital', 'climate', 'space', 'isro', 'nasa', 'health', 'disease', 'ஆராய்ச்சி', 'தடுப்பூசி', 'மருத்துவம்', 'காலநிலை', 'சுகாதாரம்', 'விண்வெளி', 'இஸ்ரோ', 'மருத்துவமனை'],
-    'sports': ['cricket', 'ipl', 'match', 'tournament', 'champion', 'olympics', 'tennis', 'football', 'கிரிக்கெட்', 'போட்டி', 'வெற்றி', 'ஐபிஎல்', 'விளையாட்டு', 'ஒலிம்பிக்'],
-    'education': ['school', 'university', 'exam', 'neet', 'syllabus', 'students', 'college', 'பள்ளி', 'பல்கலைக்கழகம்', 'தேர்வு', 'நீட்', 'மாணவர்கள்', 'கல்லூரி', 'கல்வி'],
+    "politics": ["election", "parliament", "minister", "government", "bjp", "dmk", "congress", "aiadmk", "tvk", "pmk", "vck", "ntk", "தேர்தல்", "நாடாளுமன்றம்", "முதல்வர்", "அமைச்சர்", "அரசியல்", "சட்டமன்றம்", "எம்.எல்.ஏ"],
+    "world_news": ["international", "global", "united states", "u.s.", "china", "ukraine", "nato", "russia", "israel", "gaza", "united nations", "சர்வதேச", "உலக", "அமெரிக்கா", "சீனா", "ரஷ்யா", "இலங்கை"],
+    "economy": ["economy", "gdp", "inflation", "rbi", "stock market", "rupee", "business", "company", "கடன்", "பொருளாதாரம்", "பணவீக்கம்", "பங்குச்சந்தை", "ரூபாய்", "வர்த்தகம்", "பட்ஜெட்"],
+    "crime_law": ["murder", "arrest", "police", "court", "fir", "cbi", "supreme court", "high court", "கொலை", "கைது", "காவல்", "நீதிமன்றம்", "வழக்கு", "தீர்ப்பு", "சிபிஐ", "போலீஸ்"],
+    "science_health": ["research", "vaccine", "hospital", "climate", "space", "isro", "nasa", "health", "disease", "ஆராய்ச்சி", "தடுப்பூசி", "மருத்துவம்", "காலநிலை", "சுகாதாரம்", "விண்வெளி", "இஸ்ரோ", "மருத்துவமனை"],
+    "sports": ["cricket", "ipl", "match", "tournament", "champion", "olympics", "tennis", "football", "கிரிக்கெட்", "போட்டி", "வெற்றி", "ஐபிஎல்", "விளையாட்டு", "ஒலிம்பிக்"],
+    "education": ["school", "university", "exam", "neet", "syllabus", "students", "college", "பள்ளி", "பல்கலைக்கழகம்", "தேர்வு", "நீட்", "மாணவர்கள்", "கல்லூரி", "கல்வி"],
+    "technology": ["technology", "artificial intelligence", "artificial intelligence", "ai", "software", "cyber", "smartphone", "டிஜிட்டல்", "தொழில்நுட்பம்", "செயற்கை நுண்ணறிவு"],
+    "local_news": ["vellore", "chennai", "coimbatore", "madurai", "salem", "tiruchirappalli", "tirunelveli", "காஞ்சிபுரம்", "வேலூர்", "சென்னை", "மதுரை", "கோவை", "சேலம்", "தமிழ்நாடு"],
 }
 
 def classify_topic(title, text, outlet_slug="", location=""):
-    if outlet_slug == "bbc_tamil":
-        return "world_news"
-    if outlet_slug == "tamil_mykhel":
-        return "sports"
-
-    combined_text = (str(title) + " " + str(title) + " " + str(location) + " " + str(location) + " " + str(text)[:300]).lower()
-
+    """Classify from headline and article prose; use token boundaries for English."""
+    title_text = str(title or "").casefold()
+    body_text = str(text or "")[:1200].casefold()
+    location_text = str(location or "").casefold()
     scores = {topic: 0 for topic in TOPIC_KEYWORDS}
     for topic, keywords in TOPIC_KEYWORDS.items():
-        for kw in keywords:
-            if kw in combined_text:
-                scores[topic] += combined_text.count(kw)
+        for keyword in keywords:
+            term = keyword.casefold()
+            if re.search(r"[a-z]", term):
+                pattern = r"(?<![a-z0-9])" + re.escape(term).replace(r"\ ", r"\s+") + r"(?![a-z0-9])"
+                title_hits = len(re.findall(pattern, title_text))
+                body_hits = len(re.findall(pattern, body_text))
+                location_hits = len(re.findall(pattern, location_text))
+            else:
+                title_hits = title_text.count(term)
+                body_hits = body_text.count(term)
+                location_hits = location_text.count(term)
+            scores[topic] += title_hits * (5 if topic == "local_news" else 4) + min(body_hits, 3) + location_hits * 2
+    best_score = max(scores.values(), default=0)
+    if not best_score:
+        return "general"
+    # Stable topic ordering breaks ties; headline mentions carry most weight.
+    return next(topic for topic, score in scores.items() if score == best_score)
 
-    best_topic = max(scores, key=scores.get)
-    if scores[best_topic] > 0:
-        return best_topic
-    return "general"
+
+def is_usable_article_body(body, minimum_chars=100, minimum_words=12):
+    """Reject extraction debris (empty snippets, one-word bodies, UI fragments)."""
+    value = re.sub(r"\s+", " ", str(body or "")).strip()
+    words = re.findall(r"[A-Za-z0-9஀-௿]+", value)
+    letters = re.findall(r"[A-Za-z஀-௿]", value)
+    return len(value) >= minimum_chars and len(words) >= minimum_words and len(letters) >= 60
 
 def clean_times_of_india(title, text):
     title = re.sub(r"^\s*-\s*", "", title)

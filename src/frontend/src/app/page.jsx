@@ -1,102 +1,65 @@
 "use client";
 
-import { useEffect, useState, use } from 'react';
-import { fetchEvents, fetchMetadata } from '../lib/api';
-import Header from '../components/Header';
-import EventCard from '../components/EventCard';
+import { use, useEffect, useMemo, useState } from "react";
+import { fetchEvents } from "../lib/api";
+import Header from "../components/Header";
+import EventCard from "../components/EventCard";
+import styles from "./page.module.css";
 
-export default function Home(props) {
-  const searchParams = use(props.searchParams);
+const copy = {
+  en: { eyebrow: "THE NEWS, IN CONTEXT", heading: "Follow the story, not just the headline.", intro: "Coverage from multiple newsrooms, brought together into one evolving event timeline.", loading: "Loading the latest event coverage…", empty: "No events are available in this language yet.", failed: "We couldn’t load the news right now. Check that the backend API is running, then try again." },
+  ta: { eyebrow: "செய்திகளைப் பின்னணியுடன் அறியுங்கள்", heading: "தலைப்பை மட்டும் அல்ல, நிகழ்வையும் தொடருங்கள்.", intro: "பல செய்தி நிறுவனங்களின் செய்திகளை ஒரே நிகழ்வு காலவரிசையில் காணுங்கள்.", loading: "சமீபத்திய நிகழ்வுகள் ஏற்றப்படுகின்றன…", empty: "இந்த மொழியில் நிகழ்வுகள் இன்னும் இல்லை.", failed: "செய்திகளை ஏற்ற முடியவில்லை. பின்தள API இயங்குகிறதா எனச் சரிபார்த்து மீண்டும் முயலுங்கள்." },
+};
+
+export default function Home({ searchParams }) {
+  const query = use(searchParams);
+  const lang = query?.lang === "ta" ? "ta" : "en";
+  const selectedTag = query?.tag || "";
+  const strings = copy[lang];
   const [events, setEvents] = useState([]);
-  const [metadata, setMetadata] = useState(null);
-  const lang = searchParams?.lang || 'en';
+  const [status, setStatus] = useState("loading");
 
   useEffect(() => {
-    fetchEvents(lang).then(data => setEvents(data)).catch(console.error);
-    fetchMetadata().then(data => setMetadata(data)).catch(console.error);
+    let active = true;
+    setStatus("loading");
+    fetchEvents(lang)
+      .then((data) => { if (active) { setEvents(Array.isArray(data) ? data : []); setStatus("ready"); } })
+      .catch((error) => { console.error(error); if (active) setStatus("error"); });
+    return () => { active = false; };
   }, [lang]);
 
-  const uniqueTags = [...new Set(events.flatMap(e => e.tags || []))].slice(0, 8);
-  const selectedTag = searchParams?.tag || null;
-
-  // Group events by topic
-  const groupedEvents = events.reduce((acc, event) => {
-    const t = event.topic || 'General';
-    if (!acc[t]) acc[t] = [];
-    acc[t].push(event);
-    return acc;
-  }, {});
-
-  const PRIORITY = {
-    'world_news': 1, 'world news': 1, 'உலக செய்திகள்': 1,
-    'politics': 2, 'அரசியல்': 2,
-    'economy': 3, 'பொருளாதாரம்': 3,
-    'science_health': 4, 'அறிவியல் & சுகாதாரம்': 4,
-    'education': 5, 'கல்வி': 5,
-    'sports': 6, 'விளையாட்டு': 6,
-    'crime_law': 7, 'குற்றம் & சட்டம்': 7,
-    'general': 8, 'பொது செய்திகள்': 8,
-    'news': 8, 'செய்திகள்': 8
-  };
-
-  const sortedTopics = Object.entries(groupedEvents)
-    .filter(([topic]) => !selectedTag || topic === selectedTag)
-    .sort(([a], [b]) => {
-      const pA = PRIORITY[a] || 99;
-      const pB = PRIORITY[b] || 99;
-      return pA - pB;
-    });
+  const topics = useMemo(() => {
+    const grouped = new Map();
+    for (const event of events) {
+      const topic = event.topic || (lang === "ta" ? "பொது செய்திகள்" : "General");
+      if (selectedTag && topic !== selectedTag) continue;
+      grouped.set(topic, [...(grouped.get(topic) || []), event]);
+    }
+    return [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0], lang));
+  }, [events, lang, selectedTag]);
 
   return (
-    <div style={{ backgroundColor: '#efece4', minHeight: '100vh', fontFamily: 'var(--font-georgia), serif' }}>
-      <Header lang={lang} activePage="home" tags={uniqueTags} />
+    <div className={styles.shell}>
+      <Header lang={lang} activePage="home" tags={[...new Set(events.map((item) => item.topic).filter(Boolean))].slice(0, 8)} selectedTag={selectedTag} />
+      <main className={styles.main}>
+        <section className={styles.hero}>
+          <p className={styles.eyebrow}>{strings.eyebrow}</p>
+          <h1>{strings.heading}</h1>
+          <p className={styles.intro}>{strings.intro}</p>
+          <div className={styles.heroMeta}><span>{lang === "ta" ? "தமிழ் / English" : "ENGLISH / தமிழ்"}</span><span>•</span><span>{events.length} {lang === "ta" ? "நிகழ்வுகள்" : "EVENTS"}</span></div>
+        </section>
 
-      <main style={{
-        maxWidth: '1200px',
-        margin: '0 auto',
-        padding: '32px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '48px',
-        boxSizing: 'border-box'
-      }}>
-        {metadata && (
-          <div style={{ padding: '16px', backgroundColor: '#e2dfd8', border: '1px solid #d2cec6', fontSize: '0.85rem', color: '#555', display: 'flex', justifyContent: 'space-between', borderRadius: '4px' }}>
-            <div><strong>Version:</strong> {metadata.version}</div>
-            <div><strong>NER Model:</strong> {metadata.models.ner}</div>
-            <div><strong>Embeddings:</strong> {metadata.models.embeddings}</div>
-            <div><strong>Status:</strong> {metadata.pipeline_status}</div>
-          </div>
-        )}
+        {status === "loading" && <div className={styles.state} role="status">{strings.loading}</div>}
+        {status === "error" && <div className={styles.state} role="alert">{strings.failed}</div>}
+        {status === "ready" && events.length === 0 && <div className={styles.state}>{strings.empty}</div>}
+        {status === "ready" && events.length > 0 && topics.length === 0 && <div className={styles.state}>{lang === "ta" ? "இந்தத் தலைப்பில் நிகழ்வுகள் இல்லை." : "No events match this topic."}</div>}
 
-        {events.length > 0 ? (
-          sortedTopics.map(([topic, topicEvents]) => (
-            <section key={topic} style={{ minWidth: 0 }}>
-              <div style={{
-                borderBottom: '3px solid #171717',
-                paddingBottom: '12px',
-                marginBottom: '24px',
-              }}>
-                <h2 style={{ fontSize: '2.2rem', fontWeight: 800, margin: 0, letterSpacing: '-0.02em', color: '#171717', textTransform: 'capitalize' }}>
-                  {topic.replace(/_/g, ' ')}
-                </h2>
-                <div style={{ fontSize: '0.9rem', color: '#777', marginTop: '8px' }}>
-                  {topicEvents.length} Clustered Events
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '30px' }}>
-                {topicEvents.map((event) => (
-                  <EventCard key={event.id} event={event} />
-                ))}
-              </div>
-            </section>
-          ))
-        ) : (
-          <div style={{ color: '#77736c', padding: '100px 20px', textAlign: 'center', fontSize: '1.2rem' }}>
-            Loading vast knowledge base...
-          </div>
-        )}
+        {topics.map(([topic, topicEvents]) => (
+          <section className={styles.topicSection} key={topic}>
+            <div className={styles.sectionHeading}><div><p className={styles.eyebrow}>{lang === "ta" ? "தலைப்பு" : "COVERAGE TOPIC"}</p><h2>{topic.replace(/_/g, " ")}</h2></div><span>{topicEvents.length} {lang === "ta" ? "நிகழ்வுகள்" : "EVENTS"}</span></div>
+            <div className={styles.grid}>{topicEvents.map((event) => <EventCard key={event.id} event={event} lang={lang} />)}</div>
+          </section>
+        ))}
       </main>
     </div>
   );

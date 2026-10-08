@@ -6,13 +6,8 @@ import { fetchEvent } from '../../../lib/api';
 import Header from '../../../components/Header';
 
 const strings = {
-  back: "← BACK TO NEWS",
-  summary: "SUMMARY",
-  loadingSummary: "Loading summary...",
-  timeline: "RELATED ARTICLES",
-  articles: "Total Articles",
-  entities: "KEY ENTITIES",
-  noEntities: "No entities extracted."
+  en: { back: "← BACK TO NEWS", summary: "EVENT SUMMARY", loadingSummary: "Preparing summary…", timeline: "COVERAGE TIMELINE", articles: "Total articles", entities: "KEY ENTITIES", noEntities: "No entities extracted.", overview: "Event overview", topic: "Topic", people: "People", locations: "Locations", organizations: "Organizations", events: "Events", dates: "Dates" },
+  ta: { back: "← செய்திகளுக்குத் திரும்பு", summary: "நிகழ்வு சுருக்கம்", loadingSummary: "சுருக்கம் தயாராகிறது…", timeline: "செய்தி காலவரிசை", articles: "மொத்தச் செய்திகள்", entities: "முக்கிய நிறுவனங்கள் / நபர்கள் / இடங்கள்", noEntities: "அடையாளங்கள் எதுவும் கண்டறியப்படவில்லை.", overview: "நிகழ்வு விவரம்", topic: "தலைப்பு", people: "நபர்கள்", locations: "இடங்கள்", organizations: "நிறுவனங்கள்", events: "நிகழ்வுகள்", dates: "தேதிகள்" }
 };
 
 export default function EventPage(props) {
@@ -24,6 +19,7 @@ export default function EventPage(props) {
   
   const id = params.id;
   const lang = searchParams?.lang || 'en';
+  const labels = strings[lang] || strings.en;
 
   useEffect(() => {
     fetchEvent(id, lang).then(eventData => {
@@ -85,7 +81,7 @@ export default function EventPage(props) {
               textDecoration: 'none',
             }}
           >
-            {strings.back}
+            {labels.back}
           </Link>
 
           <h1
@@ -113,22 +109,18 @@ export default function EventPage(props) {
                 marginBottom: '8px',
               }}
             >
-              {strings.summary}
+              {labels.summary}
             </div>
 
-            {event.summary ? (
-              <p style={{
-                margin: 0,
-                color: '#444',
-                lineHeight: 1.65,
-                fontSize: '1rem',
-                wordBreak: 'break-word',
-              }}>
-                {event.summary.replace(/<[^>]*>?/gm, '')}
-              </p>
+            {event.summary_bullets?.length ? (
+              <ul style={{ margin: 0, paddingLeft: '1.3rem', color: '#444', lineHeight: 1.7, fontSize: '1rem' }}>
+                {event.summary_bullets.map((bullet, index) => <li key={index} style={{ paddingLeft: '4px', marginBottom: '8px' }}>{bullet.replace(/<[^>]*>?/gm, '')}</li>)}
+              </ul>
+            ) : event.summary ? (
+              <p style={{ margin: 0, color: '#444', lineHeight: 1.65, fontSize: '1rem', wordBreak: 'break-word' }}>{event.summary.replace(/<[^>]*>?/gm, '')}</p>
             ) : (
               <p style={{ margin: 0, color: '#777', lineHeight: 1.65, fontSize: '1rem' }}>
-                {strings.loadingSummary}
+                {labels.loadingSummary}
               </p>
             )}
           </div>
@@ -138,7 +130,7 @@ export default function EventPage(props) {
           {/* Left Column: Articles */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
             <section>
-              <h2 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '16px', color: '#111' }}>{strings.timeline}</h2>
+              <h2 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '16px', color: '#111' }}>{labels.timeline}</h2>
               <div style={{ padding: '24px', backgroundColor: 'transparent', borderTop: '1px solid #bdb9b0', borderBottom: '1px solid #bdb9b0' }}>
                 {event.articles?.map((article, idx) => (
                   <div key={article.id} style={{
@@ -160,7 +152,9 @@ export default function EventPage(props) {
                       <div style={{ display: 'flex', gap: '12px', marginTop: '8px', fontSize: '0.85rem', color: '#6b7280', alignItems: 'center' }}>
                         <span style={{ fontWeight: '600' }}>{article.source_id}</span>
                         <span style={{ fontWeight: 'normal' }}>•</span>
-                        <span style={{ fontWeight: 'normal' }}>{new Date(article.published_at).toLocaleString()}</span>
+                        <span style={{ fontWeight: 'normal' }}>{article.published_at ? new Date(article.published_at).toLocaleString(lang === 'ta' ? 'ta-IN' : 'en-IN') : ''}</span>
+                        <span style={{ fontWeight: 'normal' }}>•</span>
+                        <span>{article.read_time || '3m'}{lang === 'ta' ? ' வாசிப்பு' : ' read'}</span>
                       </div>
                     </div>
                   </div>
@@ -172,44 +166,32 @@ export default function EventPage(props) {
           {/* Right Column: Context & Metadata */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
             <div style={{ padding: '24px', backgroundColor: 'transparent', borderTop: '1px solid #bdb9b0', borderBottom: '1px solid #bdb9b0' }}>
-              <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '16px', color: '#111' }}>Overview</h3>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '16px', color: '#111' }}>{labels.overview}</h3>
               <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
-                <span>Topic</span>
+                <span>{labels.topic}</span>
                 <span style={{ fontWeight: 600, color: '#111', textTransform: 'capitalize' }}>{event.tags?.[0]?.replace(/_/g, ' ') || 'News'}</span>
               </div>
               <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'space-between', color: '#4b5563' }}>
-                <span>{strings.articles}</span>
+                <span>{labels.articles}</span>
                 <span style={{ fontWeight: 600, color: '#111' }}>{event.article_count}</span>
               </div>
             </div>
 
             <div style={{ padding: '24px', backgroundColor: 'transparent', borderTop: '1px solid #bdb9b0', borderBottom: '1px solid #bdb9b0' }}>
-              <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '16px', color: '#111' }}>{strings.entities}</h3>
-              {event.entities ? (
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '16px', color: '#111' }}>{labels.entities}</h3>
+              {event.entities && Object.values(event.entities).some(values => values?.length > 0) ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  {event.entities.people?.length > 0 && (
-                    <div>
-                        <strong style={{ display: 'block', fontSize: '0.8rem', textTransform: 'uppercase', color: '#555', marginBottom: '8px' }}>People</strong>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                            {event.entities.people.map(p => (
-                                <span key={p} style={{ backgroundColor: '#dedbd4', padding: '4px 8px', borderRadius: '4px', fontSize: '0.85rem' }}>{p}</span>
-                            ))}
-                        </div>
+                  {['people', 'organizations', 'locations', 'events', 'dates'].map(group => event.entities[group]?.length > 0 && (
+                    <div key={group}>
+                      <strong style={{ display: 'block', fontSize: '0.8rem', textTransform: 'uppercase', color: '#555', marginBottom: '8px' }}>{labels[group]}</strong>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                        {event.entities[group].map(name => <span key={`${group}-${name}`} style={{ backgroundColor: '#dedbd4', padding: '4px 8px', borderRadius: '4px', fontSize: '0.85rem' }}>{name}</span>)}
+                      </div>
                     </div>
-                  )}
-                  {event.entities.locations?.length > 0 && (
-                    <div>
-                        <strong style={{ display: 'block', fontSize: '0.8rem', textTransform: 'uppercase', color: '#555', marginBottom: '8px' }}>Locations</strong>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                            {event.entities.locations.map(l => (
-                                <span key={l} style={{ backgroundColor: '#dedbd4', padding: '4px 8px', borderRadius: '4px', fontSize: '0.85rem' }}>{l}</span>
-                            ))}
-                        </div>
-                    </div>
-                  )}
+                  ))}
                 </div>
               ) : (
-                <p style={{ color: '#6b7280', fontSize: '0.95rem' }}>{strings.noEntities}</p>
+                <p style={{ color: '#6b7280', fontSize: '0.95rem' }}>{labels.noEntities}</p>
               )}
             </div>
           </div>

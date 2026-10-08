@@ -284,7 +284,7 @@ def print_results(all_results: list):
     # Print top cross-lingual pairs for each model
     for r in all_results:
         print(f"   Top 10 Cross-Lingual Pairs — {r['model']}")
-                pairs = r.get("top_cross_lingual_pairs", [])
+        pairs = r.get("top_cross_lingual_pairs", [])
         for i, p in enumerate(pairs, 1):
             print(f"  {i:>2}. sim={p['similarity']}  "
                   f"TA[{p['tamil_outlet']}]: {p['tamil_title']}")

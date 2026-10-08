@@ -34,6 +34,7 @@ import os
 import re
 import sys
 import time
+import urllib.parse
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
@@ -41,6 +42,8 @@ import feedparser
 import requests
 import trafilatura
 import yaml
+import json
+from bs4 import BeautifulSoup
 from backend.models.database import SessionLocal, Article, Outlet, RssFeed
 
 # Ensure project root is in the Python path
@@ -52,7 +55,8 @@ from backend.ingestion.tasks.text_cleaning import (
     SKIP_KEYWORDS, FESTIVAL_KEYWORDS, BREAKING_NEWS_KEYWORDS,
     classify_topic, apply_outlet_cleaners,
     normalize_political_parties,
-    extract_dateline_location
+    extract_dateline_location, clean_article_title, clean_article_body,
+    format_clean_article, build_article_description
 )
 
 # ─── Constants ───
@@ -60,7 +64,8 @@ CSV_FIELDNAMES = [
     "content_hash", "guid", "outlet_slug", "title", "description",
     "author", "published_at", "language", "article_length",
     "data_fetch_via", "canonical_url", "extraction_method",
-    "extraction_quality", "processing_status", "raw_text", "clean_text", "topic"
+    "extraction_quality", "processing_status", "raw_text", "clean_text", "topic",
+    "cluster_id", "semantic_text_hash", "named_entities", "embedding"
 ]
 
 CSV_PATH = os.path.join(PROJECT_ROOT, "src", "backend", "data", "raw_processed.csv")
@@ -76,7 +81,7 @@ HTTP_HEADERS = {
 
 
 def load_existing_data():
-    """Load existing identifiers from PostgreSQL for deduplication (scoped per outlet)."""
+    """Load PostgreSQL and CSV identifiers for scoped, repeatable RSS deduplication."""
     guids = set()
     content_hashes = set()
     existing_urls = set()
@@ -89,15 +94,13 @@ def load_existing_data():
                 guids.add((art.slug, art.guid))
             if art.slug and art.content_hash:
                 content_hashes.add((art.slug, art.content_hash))
-            if art.canonical_url:
-                existing_urls.add(art.canonical_url)
+            if art.slug and art.canonical_url:
+                existing_urls.add((art.slug, art.canonical_url))
     finally:
         db.close()
-        
-    return guids, content_hashes, existing_urls
-        
+
     try:
-        with open(csv_path, "r", encoding="utf-8") as f:
+        with open(CSV_PATH, "r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 outlet = row.get("outlet_slug", "")
@@ -110,7 +113,8 @@ def load_existing_data():
                 if row.get("canonical_url"):
                     existing_urls.add((outlet, row["canonical_url"]))
     except Exception as e:
-        print(f"Warning: Could not read existing CSV for dedup: {e}")
+        if os.path.exists(CSV_PATH):
+            print(f"Warning: Could not read existing CSV for dedup: {e}")
         
     return guids, content_hashes, existing_urls
 
@@ -165,11 +169,31 @@ def extract_image_url(entry):
         if match: return match.group(1)
     return None
 
+
+def extract_page_image(downloaded, url=""):
+    """Find a publisher's lead image when RSS does not expose one."""
+    if not downloaded:
+        return None
+    try:
+        soup = BeautifulSoup(downloaded, "html.parser")
+        for key in ("og:image", "og:image:url", "twitter:image", "twitter:image:src"):
+            node = soup.find("meta", property=key)
+            if node is None:
+                node = soup.find("meta", attrs={"name": key})
+            if node is not None and node.get("content"):
+                return urllib.parse.urljoin(url, node["content"].strip())
+        image = soup.select_one("article img[src], main img[src]")
+        if image:
+            return urllib.parse.urljoin(url, image["src"])
+    except Exception:
+        pass
+    return None
+
 def extract_article_text(entry, canonical_url):
     """
     Extract article text from an RSS entry.
     Falls back to Trafilatura if the RSS content is too short (<500 chars).
-    Returns (final_text, extraction_method, extraction_quality, rss_content_html).
+    Returns (final_text, extraction_method, extraction_quality, rss_content_html, image_url).
     """
     # Get RSS content
     rss_content_html = ""
@@ -185,6 +209,7 @@ def extract_article_text(entry, canonical_url):
     extraction_quality = 0.0
 
     # Always scrape the full article with Trafilatura to ensure completeness
+    page_image = None
     if True:
         try:
             resp = requests.get(canonical_url, headers=HTTP_HEADERS, timeout=10)
@@ -194,10 +219,14 @@ def extract_article_text(entry, canonical_url):
             downloaded = None
 
         if downloaded:
-            extracted_text = trafilatura.extract(downloaded, favor_recall=True)
+            page_image = extract_page_image(downloaded, canonical_url)
+            extracted_text = trafilatura.extract(
+                downloaded, favor_recall=True, include_comments=False,
+                include_tables=False
+            )
             
             # If RSS text was practically empty, populate raw_text with the trafilatura extraction so it's not empty
-            if len(clean_rss_text) < 50 and extracted_text:
+            if extracted_text:
                 rss_content_html = extracted_text
                 
             if extracted_text and len(extracted_text) > 10:
@@ -210,7 +239,7 @@ def extract_article_text(entry, canonical_url):
         final_text = deep_clean_text(clean_rss_text)
         extraction_quality = 0.5
 
-    return final_text, extraction_method, extraction_quality, rss_content_html
+    return final_text, extraction_method, extraction_quality, rss_content_html, page_image
 
 
 def parse_pub_date(entry):
@@ -221,8 +250,8 @@ def parse_pub_date(entry):
         try:
             return parsedate_to_datetime(entry.published)
         except Exception:
-            return datetime.utcnow()
-    return datetime.utcnow()
+            return None
+    return None
 
 
 
@@ -287,8 +316,12 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
             original_url = getattr(entry, "link", "")
             canonical_url = get_canonical_url(original_url)
             title = getattr(entry, "title", "")
-            clean_title = clean_html(title)
+            clean_title = clean_article_title(title)
             pub_date = parse_pub_date(entry)
+            # The current production dataset is intentionally scoped to 2026;
+            # never silently stamp an undated/old item as current news.
+            if not pub_date or pub_date.year != 2026:
+                continue
             
             # 2. Canonical URL Deduplication
             if canonical_url and (outlet_slug, canonical_url) in existing_urls:
@@ -296,25 +329,14 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
                 continue
 
             # Extract and clean article text
-            final_text, extraction_method, extraction_quality, rss_content_html = extract_article_text(entry, canonical_url)
-            image_url = extract_image_url(entry)
+            final_text, extraction_method, extraction_quality, rss_content_html, page_image = extract_article_text(entry, canonical_url)
+            image_url = extract_image_url(entry) or page_image
 
             # Quality gate: skip articles with insufficient content
             if not final_text or len(final_text) < MIN_CLEAN_TEXT_LENGTH:
                 filtered_quality += 1
                 continue
 
-            # Compute content hash
-            content_hash = hashlib.sha256(final_text.encode("utf-8")).hexdigest()
-
-            # 3. Content-Hash Deduplication (same exact article text)
-            if (outlet_slug, content_hash) in content_hashes:
-                skipped_dup += 1
-                continue
-
-            # Detect language and article length
-            detected_lang = detect_language(final_text)
-            
             # Apply per-outlet cleaners and classify topic
             loc, final_text = extract_dateline_location(final_text)
             clean_title, final_text = apply_outlet_cleaners(clean_title, final_text, outlet_slug, canonical_url)
@@ -338,12 +360,21 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
 
             # Remove any internal newlines in the body so it's a single continuous block
             # Convert newlines (and any following whitespaces) into a single whitespace
-            final_text = re.sub(r'\n+\s*', ' ', final_text).strip()
+            final_text = clean_article_body(final_text, clean_title)
             
             # STANDARD: Ensure content explicitly begins with the Title followed by the Body
             # The user requested "newline follwed by a whitespace should be defined" in contents,
             # so we ensure the gap between title and body is exact.
-            final_text = f"{clean_title}\n\n{final_text}"
+
+            if len(final_text) < MIN_CLEAN_TEXT_LENGTH:
+                filtered_quality += 1
+                continue
+            content_hash = hashlib.sha256(final_text.encode("utf-8")).hexdigest()
+            if (outlet_slug, content_hash) in content_hashes:
+                skipped_dup += 1
+                continue
+            detected_lang = detect_language(final_text)
+            clean_title = normalize_political_parties(clean_title, detected_lang)
             
             topic = classify_topic(clean_title, final_text, outlet_slug, location=loc)
             
@@ -360,17 +391,16 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
                 article_length_cat = "medium"
             else:
                 article_length_cat = "long"
-            t_clean = re.sub(r"\s+", " ", clean_title).strip() if clean_title else ""
-            c_clean = re.sub(r"\s+", " ", final_text).strip() if final_text else ""
-            import json
-            formatted_clean_text = json.dumps({t_clean: c_clean}, ensure_ascii=False, separators=(',', ':'))
-
+            d_clean = clean_html(getattr(entry, "description", ""))
+            formatted_clean_text = format_clean_article(clean_title, final_text)
             article_row = {
                 "content_hash": content_hash,
                 "guid": guid,
                 "outlet_slug": outlet_slug,
                 "title": clean_title,
-                "description": clean_html(getattr(entry, "description", "")),
+                "description": build_article_description(
+                    getattr(entry, "description", ""), final_text, clean_title
+                ),
                 "author": getattr(entry, "author", ""),
                 "published_at": pub_date.isoformat() if pub_date else "",
                 "language": detected_lang,
@@ -384,6 +414,7 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
                 "clean_text": formatted_clean_text,
                 "image_url": image_url,
                 "topic": topic,
+                "location": loc,
             }
 
             new_articles.append(article_row)
@@ -429,6 +460,8 @@ def run_fetch_cycle(args, existing_guids, content_hashes, existing_urls, sources
     if new_articles:
         print(f"\nSaving {len(new_articles)} new articles to PostgreSQL...")
         db = SessionLocal()
+        saved_rows = []
+        db_saved = False
         try:
             for article_dict in new_articles:
                 outlet = db.query(Outlet).filter(Outlet.slug == article_dict['outlet_slug']).first()
@@ -453,17 +486,35 @@ def run_fetch_cycle(args, existing_guids, content_hashes, existing_urls, sources
                     content_hash=article_dict['content_hash'],
                     extraction_method=article_dict['extraction_method'],
                     extraction_quality=article_dict.get('extraction_quality', 0.0),
+                    named_entities={"LOCATION": [article_dict["location"]]} if article_dict.get("location") else {},
                     processing_status="extracted"
                 )
                 db.add(art)
+                saved_rows.append(article_dict)
             db.commit()
+            db_saved = True
         except Exception as e:
             db.rollback()
             print(f"Error saving to DB: {e}")
         finally:
             db.close()
             
-        print(f"Written {len(new_articles)} new articles to {CSV_PATH}")
+        # Keep the live CSV export in sync only after a successful DB commit.
+        if db_saved and saved_rows:
+            file_exists = os.path.exists(CSV_PATH) and os.path.getsize(CSV_PATH) > 0
+            csv_fields = CSV_FIELDNAMES
+            if file_exists:
+                with open(CSV_PATH, "r", encoding="utf-8-sig", newline="") as existing_csv:
+                    existing_header = next(csv.reader(existing_csv), [])
+                if existing_header:
+                    csv_fields = existing_header
+            with open(CSV_PATH, "a", newline="", encoding="utf-8-sig") as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=csv_fields, extrasaction="ignore")
+                if not file_exists:
+                    writer.writeheader()
+                for article_row in saved_rows:
+                    writer.writerow({**article_row, "cluster_id": "", "semantic_text_hash": "", "named_entities": json.dumps({"LOCATION": article_row.get("location", [])} if article_row.get("location") else {}, ensure_ascii=False), "embedding": ""})
+            print(f"Written {len(saved_rows)} new articles to PostgreSQL and {CSV_PATH}")
     else:
         print("No new articles found in this batch (all already in CSV or filtered out).")
 

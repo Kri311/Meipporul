@@ -41,6 +41,7 @@ from backend.ner_pipeline.finetune.config import (
     DATASET_DIR, DATA_DIR, MODEL_DIR,
     TRAIN_BATCH_SIZE, EVAL_BATCH_SIZE, LEARNING_RATE,
     NUM_EPOCHS, WEIGHT_DECAY, WARMUP_RATIO, FP16,
+    GRADIENT_ACCUMULATION_STEPS,
 )
 
 logging.basicConfig(
@@ -123,73 +124,67 @@ class NERDataset(Dataset):
 # ---------------------------------------------------------------------------
 
 def compute_metrics(eval_pred):
-    """
-    Compute precision, recall, F1 per entity type + macro averages.
-    Operates on BIO tags (only counts B- tags as entity starts).
-    """
+    """Return exact BIO-span precision/recall/F1 and secondary token accuracy."""
     predictions, labels = eval_pred
     predictions = np.argmax(predictions, axis=-1)
-    
-    # Collect per-entity counts
-    entity_tp = {}  # True positives
-    entity_fp = {}  # False positives
-    entity_fn = {}  # False negatives
-    
-    for etype in ["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "DATE"]:
-        entity_tp[etype] = 0
-        entity_fp[etype] = 0
-        entity_fn[etype] = 0
-    
-    for pred_seq, label_seq in zip(predictions, labels):
-        for pred_id, label_id in zip(pred_seq, label_seq):
-            if label_id == -100:
+
+    entity_types = ["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "DATE"]
+    counts = {kind: {"tp": 0, "fp": 0, "fn": 0} for kind in entity_types}
+
+    def spans(tags):
+        found, active_type, active_start = set(), None, None
+        for index, tag in enumerate(list(tags) + ["O"]):
+            prefix, _, kind = tag.partition("-")
+            if prefix == "I" and kind == active_type:
                 continue
-            
-            pred_label = ID2LABEL.get(pred_id, "O")
-            true_label = ID2LABEL.get(label_id, "O")
-            
-            # Only count B- tags for entity-level metrics
-            if true_label.startswith("B-"):
-                etype = true_label[2:]
-                if pred_label == true_label:
-                    entity_tp[etype] += 1
-                else:
-                    entity_fn[etype] += 1
-            
-            if pred_label.startswith("B-"):
-                etype = pred_label[2:]
-                if pred_label != true_label:
-                    entity_fp[etype] += 1
-    
-    # Calculate per-entity P/R/F1
+            if active_type is not None:
+                found.add((active_type, active_start, index))
+                active_type, active_start = None, None
+            if prefix in {"B", "I"} and kind in counts:
+                active_type, active_start = kind, index
+        return found
+
+    for pred_seq, label_seq in zip(predictions, labels):
+        valid = [(int(p), int(y)) for p, y in zip(pred_seq, label_seq) if int(y) != -100]
+        gold = spans([ID2LABEL.get(y, "O") for _, y in valid])
+        predicted = spans([ID2LABEL.get(p, "O") for p, _ in valid])
+        for kind in entity_types:
+            gold_kind = {span for span in gold if span[0] == kind}
+            pred_kind = {span for span in predicted if span[0] == kind}
+            counts[kind]["tp"] += len(gold_kind & pred_kind)
+            counts[kind]["fp"] += len(pred_kind - gold_kind)
+            counts[kind]["fn"] += len(gold_kind - pred_kind)
+
     results = {}
-    precisions, recalls, f1s = [], [], []
-    
-    for etype in ["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "DATE"]:
-        tp = entity_tp[etype]
-        fp = entity_fp[etype]
-        fn = entity_fn[etype]
-        
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-        
-        results[f"{etype}_precision"] = round(precision, 4)
-        results[f"{etype}_recall"] = round(recall, 4)
-        results[f"{etype}_f1"] = round(f1, 4)
-        results[f"{etype}_support"] = tp + fn
-        
-        if (tp + fn) > 0 and etype != "DATE":  # Only include in macro if entity type is present and not DATE
-            precisions.append(precision)
-            recalls.append(recall)
-            f1s.append(f1)
-    
-    # Macro averages
-    results["macro_precision"] = round(np.mean(precisions), 4) if precisions else 0.0
-    results["macro_recall"] = round(np.mean(recalls), 4) if recalls else 0.0
-    results["macro_f1"] = round(np.mean(f1s), 4) if f1s else 0.0
-    
-    # Overall token-level accuracy (excluding -100 padding)
+    macro = {key: [] for key in ("precision", "recall", "f1")}
+    totals = {key: 0 for key in ("tp", "fp", "fn")}
+    for kind in entity_types:
+        tp, fp, fn = (counts[kind][key] for key in ("tp", "fp", "fn"))
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        results[f"{kind}_precision"] = round(precision, 4)
+        results[f"{kind}_recall"] = round(recall, 4)
+        results[f"{kind}_f1"] = round(f1, 4)
+        results[f"{kind}_support"] = tp + fn
+        # Standard macro averaging excludes classes absent from both gold and
+        # predictions. Otherwise a language with no examples of a class gets
+        # an artificial zero simply because the shared label set has it.
+        if tp + fp + fn:
+            macro["precision"].append(precision)
+            macro["recall"].append(recall)
+            macro["f1"].append(f1)
+        for key in totals:
+            totals[key] += counts[kind][key]
+    for key, values in macro.items():
+        results[f"macro_{key}"] = round(float(np.mean(values)), 4) if values else 0.0
+    micro_p = totals["tp"] / (totals["tp"] + totals["fp"]) if totals["tp"] + totals["fp"] else 0.0
+    micro_r = totals["tp"] / (totals["tp"] + totals["fn"]) if totals["tp"] + totals["fn"] else 0.0
+    results["micro_precision"] = round(micro_p, 4)
+    results["micro_recall"] = round(micro_r, 4)
+    results["micro_f1"] = round(2 * micro_p * micro_r / (micro_p + micro_r), 4) if micro_p + micro_r else 0.0
+
+    # Overall token-level accuracy is secondary and excludes padding.
     correct = 0
     total = 0
     for pred_seq, label_seq in zip(predictions, labels):
@@ -288,6 +283,74 @@ def save_training_history_csv(trainer):
     return history_csv
 
 
+def save_training_history_plot(trainer):
+    """Plot train/eval loss and eval macro F1 from the trainer's epoch history."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.warning("matplotlib missing; NER training history plot skipped")
+        return None
+    history = trainer.state.log_history
+    train_points = [(row.get("epoch"), row.get("loss")) for row in history if row.get("loss") is not None]
+    eval_points = [(row.get("epoch"), row.get("eval_loss")) for row in history if row.get("eval_loss") is not None]
+    f1_points = [(row.get("epoch"), row.get("eval_macro_f1")) for row in history if row.get("eval_macro_f1") is not None]
+    if not (train_points or eval_points or f1_points):
+        logger.warning("No epoch metrics were recorded; NER training plot skipped")
+        return None
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+    if train_points:
+        axes[0].plot(*zip(*train_points), marker="o", label="Train loss")
+    if eval_points:
+        axes[0].plot(*zip(*eval_points), marker="o", label="Validation loss")
+    axes[0].set(title="NER loss by epoch", xlabel="Epoch", ylabel="Loss")
+    axes[0].legend()
+    axes[0].grid(alpha=0.2)
+    if f1_points:
+        axes[1].plot(*zip(*f1_points), marker="o", color="#287a59", label="Exact-span macro F1")
+    axes[1].set(title="NER validation quality", xlabel="Epoch", ylabel="Macro F1", ylim=(0, 1))
+    axes[1].legend()
+    axes[1].grid(alpha=0.2)
+    fig.tight_layout()
+    path = os.path.join(DATA_DIR, f"ner_training_curves_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    logger.info("Training plot saved to %s", path)
+    return path
+
+
+def load_base_model(model_name):
+    """Load MuRIL, retrying once if the HF cache races on a partial blob.
+
+    Hugging Face may raise FileNotFoundError while copying a ``*.incomplete``
+    cache blob after an interrupted/concurrent download. A forced retry asks
+    the hub client to fetch the missing file again instead of leaving training
+    stuck on that stale cache entry.
+    """
+    for attempt in range(2):
+        force_download = attempt == 1
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name, force_download=force_download
+            )
+            model = AutoModelForTokenClassification.from_pretrained(
+                model_name,
+                num_labels=NUM_LABELS,
+                id2label=ID2LABEL,
+                label2id=LABEL2ID,
+                force_download=force_download,
+            )
+            return tokenizer, model
+        except FileNotFoundError as exc:
+            if attempt or ".incomplete" not in str(exc):
+                raise
+            logger.warning(
+                "Hugging Face cache referenced a missing partial download; "
+                "retrying %s with force_download=True. Ensure only one "
+                "training process is downloading this model.",
+                model_name,
+            )
+
+
 # ---------------------------------------------------------------------------
 # Main Training Function
 # ---------------------------------------------------------------------------
@@ -317,13 +380,7 @@ def train():
         model_name = BASE_MODEL_NAME
         logger.info(f"Loading model from HuggingFace: {model_name}")
     
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForTokenClassification.from_pretrained(
-        model_name,
-        num_labels=NUM_LABELS,
-        id2label=ID2LABEL,
-        label2id=LABEL2ID,
-    )
+    tokenizer, model = load_base_model(model_name)
     
     logger.info(f"Model loaded. Labels: {NUM_LABELS}, Params: {model.num_parameters():,}")
     
@@ -345,10 +402,15 @@ def train():
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=TRAIN_BATCH_SIZE,
         per_device_eval_batch_size=EVAL_BATCH_SIZE,
+        gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
+        gradient_checkpointing=True,
         learning_rate=LEARNING_RATE,
         weight_decay=WEIGHT_DECAY,
         warmup_ratio=WARMUP_RATIO,
         fp16=FP16 and torch.cuda.is_available(),
+        # AdamW keeps two full-size optimizer states on the GPU. Adafactor
+        # greatly reduces optimizer-state memory for this 5.6GB GPU target.
+        optim="adafactor",
         eval_strategy="epoch",
         save_strategy="epoch",
         logging_strategy="steps",
@@ -399,6 +461,11 @@ def train():
     # --- 8. Save metrics as CSV ---
     entity_csv, summary_csv = save_metrics_csv(eval_metrics, phase="final_eval")
     history_csv = save_training_history_csv(trainer)
+    history_plot = save_training_history_plot(trainer)
+
+    # Language-separated validation for the saved best checkpoint.
+    from backend.ner_pipeline.finetune.evaluate_per_language import evaluate_languages
+    language_metrics = evaluate_languages(model_dir=best_model_dir)
     
     logger.info(f"\n{'='*60}")
     logger.info(f"FINE-TUNING COMPLETE")
@@ -410,6 +477,13 @@ def train():
     logger.info(f"Metrics CSV:   {entity_csv}")
     logger.info(f"Summary CSV:   {summary_csv}")
     logger.info(f"History CSV:   {history_csv}")
+    logger.info(f"History plot:  {history_plot}")
+    for language, metrics in language_metrics.items():
+        logger.info(
+            "%s exact-span macro P/R/F1: %.4f / %.4f / %.4f",
+            language.upper(), metrics.get("eval_macro_precision", 0),
+            metrics.get("eval_macro_recall", 0), metrics.get("eval_macro_f1", 0),
+        )
     logger.info(f"{'='*60}")
     
     return eval_metrics

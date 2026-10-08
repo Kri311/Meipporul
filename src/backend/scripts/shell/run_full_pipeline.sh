@@ -3,8 +3,13 @@ cd "$(dirname "$0")/../../../.."
 
 set -e
 
-# Redirect all output of this script to both console and rss_daemon.log
-exec > >(tee -a logs/rss_daemon.log) 2>&1
+# Prevent a second loop even when the script is started outside start_daemon.sh.
+mkdir -p logs
+exec 8>"logs/rss_daemon.instance.lock"
+if ! flock -n 8; then
+    echo "RSS pipeline already running; refusing to start a second loop."
+    exit 1
+fi
 
 INTERVAL=15
 

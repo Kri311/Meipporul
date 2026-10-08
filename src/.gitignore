@@ -12,6 +12,10 @@ retrieved_data/
 *.json
 *.sqlite3
 
+# Human-reviewed evaluation input templates
+!backend/evaluation/annotations/event_pairs.csv
+!backend/evaluation/annotations/summaries.csv
+
 # Explicitly UN-ignore important frontend JSON configuration files
 !frontend/package.json
 !frontend/jsconfig.json
