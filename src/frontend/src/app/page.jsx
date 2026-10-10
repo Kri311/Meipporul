@@ -11,19 +11,54 @@ const copy = {
   ta: { eyebrow: "செய்திகளைப் பின்னணியுடன் அறியுங்கள்", heading: "தலைப்பை மட்டும் அல்ல, நிகழ்வையும் தொடருங்கள்.", intro: "பல செய்தி நிறுவனங்களின் செய்திகளை ஒரே நிகழ்வு காலவரிசையில் காணுங்கள்.", loading: "சமீபத்திய நிகழ்வுகள் ஏற்றப்படுகின்றன…", empty: "இந்த மொழியில் நிகழ்வுகள் இன்னும் இல்லை.", failed: "செய்திகளை ஏற்ற முடியவில்லை. பின்தள API இயங்குகிறதா எனச் சரிபார்த்து மீண்டும் முயலுங்கள்." },
 };
 
+// Keep the fetched event list for soft navigations within this page session.
+// A browser reload creates a fresh module and therefore fetches current events.
+const eventCache = new Map();
+
+function getCachedEvents(lang) {
+  const cached = eventCache.get(lang);
+  return Array.isArray(cached) ? cached : null;
+}
+
+function fetchEventsOnce(lang) {
+  if (eventCache.has(lang)) {
+    const cached = eventCache.get(lang);
+    return cached instanceof Promise ? cached : Promise.resolve(cached);
+  }
+  const request = fetchEvents(lang)
+    .then((data) => {
+      const events = Array.isArray(data) ? data : [];
+      eventCache.set(lang, events);
+      return events;
+    })
+    .catch((error) => {
+      eventCache.delete(lang);
+      throw error;
+    });
+  eventCache.set(lang, request);
+  return request;
+}
+
 export default function Home({ searchParams }) {
   const query = use(searchParams);
   const lang = query?.lang === "ta" ? "ta" : "en";
   const selectedTag = query?.tag || "";
   const strings = copy[lang];
-  const [events, setEvents] = useState([]);
-  const [status, setStatus] = useState("loading");
+  const [events, setEvents] = useState(() => getCachedEvents(lang) || []);
+  const [status, setStatus] = useState(() => getCachedEvents(lang) === null ? "loading" : "ready");
 
   useEffect(() => {
     let active = true;
+    const cached = getCachedEvents(lang);
+    if (cached !== null) {
+      setEvents(cached);
+      setStatus("ready");
+      return () => { active = false; };
+    }
+
     setStatus("loading");
-    fetchEvents(lang)
-      .then((data) => { if (active) { setEvents(Array.isArray(data) ? data : []); setStatus("ready"); } })
+    fetchEventsOnce(lang)
+      .then((data) => { if (active) { setEvents(data); setStatus("ready"); } })
       .catch((error) => { console.error(error); if (active) setStatus("error"); });
     return () => { active = false; };
   }, [lang]);

@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Veritas Lens — News in Context",
+  title: "Veritas Lens",
   description: "Follow English and Tamil news coverage across event timelines.",
 };
 
