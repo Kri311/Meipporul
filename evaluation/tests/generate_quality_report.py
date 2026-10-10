@@ -5,7 +5,10 @@ from statistics import median
 from datetime import datetime
 
 def generate_report():
-    csv_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'raw_processed.csv')
+    csv_path = os.path.abspath(os.path.join(
+        os.path.dirname(__file__), '..', '..', 'src', 'backend', 'data',
+        'trafiltura_preprocessed.csv'
+    ))
     
     if not os.path.exists(csv_path):
         print(f"Error: {csv_path} not found.")

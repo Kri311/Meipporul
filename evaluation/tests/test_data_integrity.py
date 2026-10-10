@@ -3,7 +3,10 @@ import os
 import pytest
 import re
 
-CSV_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'raw_processed.csv')
+CSV_PATH = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), '..', '..', 'src', 'backend', 'data',
+    'trafiltura_preprocessed.csv'
+))
 
 @pytest.fixture(scope="module")
 def articles():
@@ -18,7 +21,7 @@ def articles():
 
 def test_file_exists(articles):
     """Verify the data file was created."""
-    assert os.path.exists(CSV_PATH), "raw_processed.csv does not exist."
+    assert os.path.exists(CSV_PATH), "trafiltura_preprocessed.csv does not exist."
     assert len(articles) > 0, "No articles found in the CSV."
 
 def test_no_html_tags(articles):

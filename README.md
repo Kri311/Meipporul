@@ -8,8 +8,9 @@ a Next.js interface.
 ## Article data contract
 
 The live daemon's final export is
-src/backend/data/trafiltura_preprocessed.csv. It contains 2026 articles and
-the requested fields through `topic`, plus `image_url` for the news-feed cards:
+src/backend/data/trafiltura_preprocessed.csv. It contains dated canonical
+articles and the requested fields through `topic`, plus `image_url` for the
+news-feed cards:
 
 content_hash, guid, outlet_slug, title, description, author, published_at, language, article_length, data_fetch_via, canonical_url, extraction_method, extraction_quality, processing_status, raw_text, clean_text, topic, image_url
 
@@ -28,10 +29,13 @@ content_hash, guid, outlet_slug, title, description, author, published_at, langu
   the associated event cluster. PostgreSQL also keeps NER and embedding fields
   for downstream processing; they are intentionally not part of this CSV view.
 
-The 2026 reprocessor reads raw_processed.csv, fetches each eligible canonical
-URL in batches, skips unavailable/invalid articles and atomically replaces the
-output only after successful completion. --batch-size is a checkpoint
-interval, not a maximum row count.
+The historical reprocessor reads raw_processed.csv, fetches eligible 2026
+canonical URLs in batches, skips unavailable/invalid articles and atomically
+replaces the output only after successful completion. --batch-size is a
+checkpoint interval, not a maximum row count. Live ingestion accepts dated RSS
+items up to seven days old by default (`RSS_MAX_AGE_DAYS`, interpreted in
+India time); older articles already in PostgreSQL remain available in the
+archive.
 
 ## Architecture
 
@@ -120,7 +124,7 @@ The API exposes GET /events/?lang=en|ta, GET /events/{id}?lang=en|ta,
 and /metadata. Configure the frontend API origin with the environment
 settings in src/frontend/src/lib/api.js.
 
-## Fine-tuning and evaluation
+## NER annotation, training, and event clustering evaluation
 
 Run commands from the repository root. Install the declared Python
 dependencies first (Matplotlib is used for the PNG plots):
@@ -129,6 +133,7 @@ dependencies first (Matplotlib is used for the PNG plots):
 source venv/bin/activate
 pip install -r requirements.txt
 PYTHONPATH=./src python3 src/backend/ner_pipeline/finetune/auto_annotate.py
+# Review/correct dataset/train.jsonl and dataset/val.jsonl before training.
 PYTHONPATH=./src python3 src/backend/ner_pipeline/finetune/train.py
 ```
 
@@ -139,6 +144,42 @@ are automatically generated weak labels, so treat the scores as diagnostics,
 not as human-gold model quality. Review and correct annotations before using
 the scores for a final performance claim.
 
+The annotator uses bundled Tamil/English corpora, gazetteers and optional model
+output; it does not label live database articles. For rule/gazetteer-only weak
+labels, pass `--no-model`. Human review is needed before treating labels as
+gold.
+
+To rerun runtime NER over the database, then refresh embeddings and event
+assignments:
+
+```bash
+PYTHONPATH=./src python3 src/backend/ner_pipeline/zero_shot/nlp_pipeline.py
+PYTHONPATH=./src python3 src/backend/semantic_processing/embedding_service.py
+PYTHONPATH=./src python3 src/backend/semantic_processing/clustering_service.py
+PYTHONPATH=./src python3 src/backend/semantic_processing/topic_modeling.py
+PYTHONPATH=./src python3 src/backend/export/csv_export.py
+```
+
+The direct clustering command reruns DBSCAN over all stored embeddings even if
+no new embedding was generated. Tune precision with `DBSCAN_EPS` and
+`CLUSTER_MIN_PAIRWISE_SIMILARITY`; defaults are 0.11 and 0.88. Smaller
+`DBSCAN_EPS` and larger pairwise similarity thresholds produce smaller,
+stricter event groups.
+
+For clustering evaluation, manually label article pairs in
+`src/backend/evaluation/annotations/event_pairs.csv` with columns
+`guid_a,guid_b,same_event` (canonical URLs are accepted in the first two
+columns). Include both same-event and different-event pairs, then run:
+
+```bash
+PYTHONPATH=./src python3 src/backend/evaluation/evaluate_event_clustering.py
+```
+
+The evaluator compares labels with current database `cluster_id` values and
+writes CSV, JSON, and PNG metrics to `src/backend/evaluation/results/`. Pair
+labels should be human-reviewed; this evaluates clustering but does not train
+it.
+
 The NER trainer defaults to micro-batches of 1 with gradient accumulation,
 gradient checkpointing, and Adafactor to fit a 5.6GB GPU. This lowers peak
 memory at the cost of slower training.
@@ -146,8 +187,8 @@ memory at the cost of slower training.
 The first event-detail request downloads the summarization checkpoint from
 Hugging Face (about 2.3GB); allow network access and disk space for the cache.
 It loads lazily, not during API startup. Device selection defaults to `auto`
-(CUDA FP16 when available, CPU fallback on memory pressure). To force CPU for
-the API process, start it with `SUMMARY_DEVICE=cpu`.
+(CUDA FP16 when available, CPU fallback on memory pressure). To force GPU rendering for
+the API process (when available), start it with `SUMMARY_DEVICE=cuda`.
 
 Event clustering uses pretrained embeddings and has no trainable fine-tuning
 step. Event summaries are generated automatically with the pretrained bilingual
