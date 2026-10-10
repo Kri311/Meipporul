@@ -13,7 +13,7 @@ fi
 
 # Canonicalize and persist article text first. This resets embeddings/clusters
 # only for rows whose body actually changed, so subsequent stages recompute them.
-echo "[0/5] Normalizing persisted 2026 article text before enrichment..."
+echo "[0/5] Normalizing dated article text before enrichment..."
 PYTHONPATH="./src" python src/backend/export/csv_export.py
 
 echo "[1/5] Extracting Named Entities from clean article bodies..."

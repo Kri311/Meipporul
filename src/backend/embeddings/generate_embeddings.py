@@ -124,7 +124,7 @@ def embed_from_db(batch_limit: int = 50):
         db.close()
 
 
-# CSV Mode: Generate embeddings from raw_processed.csv and save to new CSV
+# CSV Mode: Generate embeddings from the canonical processed dataset.
 def embed_from_csv(
     input_csv: str = None, 
     output_csv: str = None
@@ -137,7 +137,7 @@ def embed_from_csv(
     project_dir = os.path.dirname(base_dir)
     
     if input_csv is None:
-        input_csv = os.path.join(project_dir, "data", "raw_processed.csv")
+        input_csv = os.path.join(project_dir, "data", "trafiltura_preprocessed.csv")
     if output_csv is None:
         output_csv = os.path.join(base_dir, "embedded_articles.csv")
     
@@ -241,7 +241,7 @@ def main():
     )
     parser.add_argument(
         "--from-csv", action="store_true",
-        help="Generate embeddings from data/raw_processed.csv instead of DB"
+        help="Generate embeddings from data/trafiltura_preprocessed.csv instead of DB"
     )
     parser.add_argument(
         "--input", type=str, default=None,

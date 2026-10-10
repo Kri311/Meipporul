@@ -44,7 +44,7 @@ MODELS = {
 
 # Data Loading
 def load_articles(csv_path: str, sample_size: int = None):
-    """Load articles from raw_processed.csv."""
+    """Load articles from the selected processed article CSV."""
     print(f"\n Loading articles from {csv_path}...")
     
     if not os.path.exists(csv_path):
@@ -387,7 +387,7 @@ def main():
     )
     parser.add_argument(
         "--input", type=str, default=None,
-        help="Path to input CSV (default: data/raw_processed.csv)"
+        help="Path to input CSV (default: data/trafiltura_preprocessed.csv)"
     )
     parser.add_argument(
         "--sample", type=int, default=None,
@@ -402,7 +402,7 @@ def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.path.dirname(base_dir)
     
-    input_csv = args.input or os.path.join(project_dir, "data", "raw_processed.csv")
+    input_csv = args.input or os.path.join(project_dir, "data", "trafiltura_preprocessed.csv")
     output_dir = args.output_dir or base_dir
     
     run_benchmark(input_csv, sample_size=args.sample, output_dir=output_dir)

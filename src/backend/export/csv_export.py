@@ -32,11 +32,14 @@ PREPROCESSED_FIELDNAMES = [
     "processing_status", "raw_text", "clean_text", "topic", "image_url",
 ]
 DATA_DIR = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")), "data")
-LIVE_CSV_PATH = os.path.join(DATA_DIR, "raw_processed.csv")
 TRAFILTURA_CSV_PATH = os.path.join(DATA_DIR, "trafiltura_preprocessed.csv")
+RAW_CSV_PATH = os.path.join(DATA_DIR, "raw_processed.csv")
+# Keep the old constant name for import compatibility, but make the processed
+# dataset the live/default export used by the application pipeline.
+LIVE_CSV_PATH = TRAFILTURA_CSV_PATH
 
 
-def export_to_csv(output_path=LIVE_CSV_PATH, trafiltura_output_path=TRAFILTURA_CSV_PATH):
+def export_to_csv(output_path=LIVE_CSV_PATH, trafiltura_output_path=None):
     db = SessionLocal()
     try:
         articles = db.query(Article).order_by(Article.published_at.desc().nulls_last()).all()
@@ -131,10 +134,10 @@ def export_to_csv(output_path=LIVE_CSV_PATH, trafiltura_output_path=TRAFILTURA_C
             }
 
         for path in output_paths:
-            is_trafiltura_output = trafiltura_output_path and path == trafiltura_output_path
+            is_trafiltura_output = path == TRAFILTURA_CSV_PATH or path == trafiltura_output_path
             export_articles = [
                 article for article in articles
-                if not is_trafiltura_output or (article.published_at and article.published_at.year == 2026)
+                if not is_trafiltura_output or article.published_at
             ]
             if is_trafiltura_output:
                 export_articles = [

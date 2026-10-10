@@ -25,6 +25,7 @@ EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "intfloat/multilingual-
 EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "32"))
 EMBEDDING_DIM = 768
 MAX_CHUNK_CHARS = 1800
+HEADLINE_VECTOR_WEIGHT = float(os.getenv("HEADLINE_VECTOR_WEIGHT", "0.65"))
 
 class EmbeddingService:
     """Handles article embedding generation with text hashing and metadata tracking."""
@@ -44,11 +45,10 @@ class EmbeddingService:
     
     @staticmethod
     def generate_semantic_text(article) -> str:
-        """Build a source-language E5 passage from headline and body, never JSON."""
+        """Build a versioned, separable headline/body representation, never JSON."""
         title, body = parse_clean_article(article.clean_text, article.title)
         title = (article.title or title).strip()
-        text = " ".join(part for part in (title, body) if part).strip()
-        return f"passage: {text}"
+        return f"semantic-v2\nheadline: {title}\nbody: {body}"
 
     @staticmethod
     def _chunk_passage(text: str) -> list:
@@ -92,24 +92,49 @@ class EmbeddingService:
         return current_hash != article.semantic_text_hash
     
     def embed_batch(self, texts: list) -> np.ndarray:
-        """Generate normalized embeddings for a batch of texts."""
+        """Combine headline-focused and body-context vectors per article.
+
+        Averaging chunks from the entire body dilutes the headline on long
+        stories, which can make unrelated coverage look similar. A weighted
+        headline/body vector keeps event identity anchored to what the story
+        is actually about while retaining article context.
+        """
         model = self._get_model()
-        chunk_groups = [self._chunk_passage(text) for text in texts]
-        flat_chunks = [chunk for group in chunk_groups for chunk in group]
-        chunk_embeddings = model.encode(
-            flat_chunks,
+        components = []
+        flat_passages = []
+        for text in texts:
+            headline = ""
+            body = text
+            if text.startswith("semantic-v2\n"):
+                fields = text.split("\n", 2)
+                headline = fields[1].removeprefix("headline: ").strip() if len(fields) > 1 else ""
+                body = fields[2].removeprefix("body: ").strip() if len(fields) > 2 else ""
+            headline_index = len(flat_passages)
+            flat_passages.append(f"passage: {headline or body}")
+            body_chunks = self._chunk_passage(f"passage: {body}") if body else []
+            body_start = len(flat_passages)
+            flat_passages.extend(body_chunks)
+            components.append((headline_index, body_start, len(body_chunks)))
+
+        encoded = model.encode(
+            flat_passages,
             batch_size=EMBEDDING_BATCH_SIZE, 
             normalize_embeddings=True,
             show_progress_bar=False
         )
         article_embeddings = []
-        offset = 0
-        for group in chunk_groups:
-            vectors = chunk_embeddings[offset:offset + len(group)]
-            offset += len(group)
-            mean_vector = np.mean(vectors, axis=0)
-            norm = np.linalg.norm(mean_vector)
-            article_embeddings.append(mean_vector / norm if norm else mean_vector)
+        for headline_index, body_start, body_count in components:
+            headline_vector = encoded[headline_index]
+            if body_count:
+                body_vector = np.mean(encoded[body_start:body_start + body_count], axis=0)
+                body_norm = np.linalg.norm(body_vector)
+                if body_norm:
+                    body_vector = body_vector / body_norm
+                vector = HEADLINE_VECTOR_WEIGHT * headline_vector + (1 - HEADLINE_VECTOR_WEIGHT) * body_vector
+            else:
+                vector = headline_vector
+            norm = np.linalg.norm(vector)
+            article_embeddings.append(vector / norm if norm else vector)
         return np.asarray(article_embeddings)
     
     def process_pending_articles(self, limit: int = None) -> int:

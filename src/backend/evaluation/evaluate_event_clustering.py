@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from backend.evaluation.metrics import RESULTS_DIR, binary_metrics, plot_metric_groups, timestamp, write_csv, write_json
 from backend.models.database import SessionLocal, Article
+from sqlalchemy import or_
 
 ANNOTATIONS_DIR = os.path.join(os.path.dirname(__file__), "annotations")
 DEFAULT_PAIRS = os.path.join(ANNOTATIONS_DIR, "event_pairs.csv")
@@ -36,8 +37,17 @@ def evaluate(pairs_path):
     guids = {row[key].strip() for row in pairs for key in ("guid_a", "guid_b") if row.get(key)}
     db = SessionLocal()
     try:
-        articles = db.query(Article).filter(Article.guid.in_(guids)).all()
-        lookup = {article.guid: article for article in articles}
+        # Older annotation sheets used article URLs in guid_a/guid_b. Accept
+        # both stable GUIDs and canonical URLs so those labels remain usable.
+        articles = db.query(Article).filter(or_(
+            Article.guid.in_(guids), Article.canonical_url.in_(guids)
+        )).all()
+        lookup = {}
+        for article in articles:
+            if article.guid:
+                lookup[article.guid] = article
+            if article.canonical_url:
+                lookup[article.canonical_url] = article
         grouped = {"ta": ([], []), "en": ([], [])}
         skipped = 0
         for row in pairs:

@@ -15,13 +15,17 @@ from backend.models.database import (
 from backend.ingestion.tasks.text_cleaning import parse_clean_article
 
 # Configuration
-DBSCAN_EPS = float(os.getenv("DBSCAN_EPS", "0.15"))           # cosine distance threshold
+DBSCAN_EPS = float(os.getenv("DBSCAN_EPS", "0.11"))           # cosine distance threshold
 DBSCAN_MIN_SAMPLES = int(os.getenv("DBSCAN_MIN_SAMPLES", "2"))
 AGGLO_DISTANCE_THRESHOLD = float(os.getenv("AGGLO_DISTANCE_THRESHOLD", "0.15"))
 CLUSTER_MAX_GAP_DAYS = int(os.getenv("CLUSTER_MAX_GAP_DAYS", "14"))
 CLUSTER_MAX_ARTICLES = int(os.getenv("CLUSTER_MAX_ARTICLES", "50"))
-CLUSTER_MIN_CENTROID_SIMILARITY = float(os.getenv("CLUSTER_MIN_CENTROID_SIMILARITY", "0.80"))
+CLUSTER_MIN_CENTROID_SIMILARITY = float(os.getenv("CLUSTER_MIN_CENTROID_SIMILARITY", "0.82"))
+CLUSTER_MIN_PAIRWISE_SIMILARITY = float(os.getenv("CLUSTER_MIN_PAIRWISE_SIMILARITY", "0.88"))
+CLUSTER_ID_REUSE_SIMILARITY = float(os.getenv("CLUSTER_ID_REUSE_SIMILARITY", "0.90"))
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "intfloat/multilingual-e5-base")
+EMBEDDING_REPRESENTATION_VERSION = "semantic-v2-headline-weighted"
+CLUSTER_EMBEDDING_VERSION = f"{EMBEDDING_MODEL_NAME}:{EMBEDDING_REPRESENTATION_VERSION}"
 
 # Logging setup
 log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
@@ -39,7 +43,8 @@ class ClusteringService:
     def _fetch_embedded_articles(self, db: Any) -> List[Any]:
         """Fetch all articles that have embeddings."""
         articles = db.query(Article).filter(
-            Article.embedding.isnot(None)
+            Article.embedding.isnot(None),
+            Article.published_at.isnot(None),
         ).all()
         return articles
     
@@ -95,7 +100,12 @@ class ClusteringService:
         return distances
 
     def _split_chained_clusters(self, labels: np.ndarray, articles: List[Any], embeddings: np.ndarray) -> np.ndarray:
-        """Break DBSCAN single-link chains by fixed time span and centroid cohesion."""
+        """Break DBSCAN chains unless every member is close to every other member.
+
+        DBSCAN's connected-neighbor rule is prone to chaining: A can be close to
+        B and B close to C even when A and C describe different events. The
+        pairwise condition makes each emitted event a cohesive group.
+        """
         refined = np.full(len(labels), -1, dtype=int)
         next_label = max((int(label) for label in labels if label >= 0), default=-1) + 1
         for original in sorted(set(int(label) for label in labels if label >= 0)):
@@ -111,7 +121,11 @@ class ClusteringService:
                 loses_cohesion = bool(current and float(np.dot(
                     self._compute_centroid(embeddings[current]), embeddings[idx]
                 )) < CLUSTER_MIN_CENTROID_SIMILARITY)
-                if current and (exceeds_span or exceeds_size or loses_cohesion):
+                loses_pairwise_cohesion = bool(current and min(
+                    float(np.dot(embeddings[idx], embeddings[member]))
+                    for member in current
+                ) < CLUSTER_MIN_PAIRWISE_SIMILARITY)
+                if current and (exceeds_span or exceeds_size or loses_cohesion or loses_pairwise_cohesion):
                     groups.append(current)
                     current, anchor_date = [], None
                 if not current:
@@ -137,7 +151,7 @@ class ClusteringService:
         cluster_map = {}  # local_label -> NewsCluster.id
         existing = db.query(NewsCluster).filter(
             NewsCluster.algorithm == algorithm,
-            NewsCluster.embedding_model_version == EMBEDDING_MODEL_NAME,
+            NewsCluster.embedding_model_version == CLUSTER_EMBEDDING_VERSION,
             NewsCluster.centroid_embedding.isnot(None),
         ).all()
         used_existing = set()
@@ -152,13 +166,20 @@ class ClusteringService:
             member_embeddings = embeddings[member_indices]
             centroid = self._compute_centroid(member_embeddings)
             
-            representative_article = articles[member_indices[0]]
+            # Choose the member closest to the group centroid rather than the
+            # first DB row (whose order is not meaningful). This keeps the
+            # event headline aligned with the stories used for its summary.
+            representative_index = max(
+                member_indices,
+                key=lambda index: float(np.dot(embeddings[index], centroid)),
+            )
+            representative_article = articles[representative_index]
             
             # Reuse the closest prior event centroid when the new group is still
             # semantically the same event; this prevents a fresh event ID on every
             # daemon cycle when the full corpus is reclustered.
             best = None
-            best_similarity = 0.82
+            best_similarity = CLUSTER_ID_REUSE_SIMILARITY
             for candidate in existing:
                 if candidate.id in used_existing:
                     continue
@@ -172,8 +193,8 @@ class ClusteringService:
                     cluster_key=f"{algorithm}_event_{run.id}_{label}",
                     label=None,
                     algorithm=algorithm,
-                    algorithm_version="2.0",
-                    embedding_model_version=EMBEDDING_MODEL_NAME,
+                    algorithm_version="2.1",
+                    embedding_model_version=CLUSTER_EMBEDDING_VERSION,
                     article_count=len(member_indices),
                     centroid_embedding=centroid.tolist(),
                 )
@@ -253,8 +274,16 @@ class ClusteringService:
                 algorithm="dbscan",
                 algorithm_version="sklearn",
                 embedding_model=EMBEDDING_MODEL_NAME,
-                embedding_model_version=EMBEDDING_MODEL_NAME,
-                parameters={"eps": eps, "min_samples": min_samples},
+                embedding_model_version=CLUSTER_EMBEDDING_VERSION,
+                parameters={
+                    "eps": eps,
+                    "min_samples": min_samples,
+                    "max_gap_days": CLUSTER_MAX_GAP_DAYS,
+                    "max_articles": CLUSTER_MAX_ARTICLES,
+                    "min_centroid_similarity": CLUSTER_MIN_CENTROID_SIMILARITY,
+                    "min_pairwise_similarity": CLUSTER_MIN_PAIRWISE_SIMILARITY,
+                    "cluster_id_reuse_similarity": CLUSTER_ID_REUSE_SIMILARITY,
+                },
                 num_articles=len(articles),
             )
             db.add(run)

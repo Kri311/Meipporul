@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch lead images for existing 2026 articles and sync PostgreSQL + CSV.
+"""Fetch lead images for dated articles and sync PostgreSQL + CSV.
 
 This operation only fills empty image_url values. It preserves all existing
 columns and article content in trafiltura_preprocessed.csv.
@@ -12,7 +12,6 @@ import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -22,6 +21,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
 from backend.models.database import SessionLocal, Article
+from backend.ingestion.tasks.text_cleaning import article_page_matches_title
 
 CSV_PATH = os.path.join(PROJECT_ROOT, "src", "backend", "data", "trafiltura_preprocessed.csv")
 USER_AGENT = (
@@ -84,6 +84,8 @@ def fetch_image(row, timeout):
         )
         if response.status_code != 200:
             return row.get("guid", ""), None, f"http_{response.status_code}"
+        if not article_page_matches_title(response.content, row.get("title", "")):
+            return row.get("guid", ""), None, "title_mismatch"
         return row.get("guid", ""), image_from_html(response.content, response.url), "ok"
     except requests.RequestException as exc:
         return row.get("guid", ""), None, type(exc).__name__
@@ -129,27 +131,25 @@ def main():
     parser.add_argument("--batch-size", type=int, default=50)
     parser.add_argument(
         "--refresh", action="store_true",
-        help="Refetch and replace existing images for 2026 articles (use to repair mismatched/old images)",
+        help="Refetch and replace existing images for all dated articles (use to repair mismatched/old images)",
     )
     args = parser.parse_args()
     if args.workers < 1 or args.batch_size < 1:
         parser.error("--workers and --batch-size must be positive")
 
     fieldnames, rows = load_csv(args.csv)
-    # Only process the live 2026 dataset and leave all old records unchanged.
+    # Repair images for the full dated archive, including newly collected news.
     eligible = []
     for row in rows:
         if (row.get("image_url") or "").strip() and not args.refresh:
             continue
-        try:
-            year = datetime.fromisoformat((row.get("published_at") or "").replace("Z", "+00:00")).year
-        except ValueError:
+        if not row.get("published_at"):
             continue
-        if year == 2026:
-            eligible.append(row)
+        eligible.append(row)
 
-    print(f"Rows in CSV: {len(rows)}; 2026 rows needing images: {len(eligible)}")
+    print(f"Rows in CSV: {len(rows)}; dated rows needing images: {len(eligible)}")
     fetched = {}
+    checked = {}
     outcomes = {}
     for start in range(0, len(eligible), args.batch_size):
         batch = eligible[start:start + args.batch_size]
@@ -157,6 +157,8 @@ def main():
             futures = [pool.submit(fetch_image, row, args.timeout) for row in batch]
             for future in as_completed(futures):
                 guid, image_url, result = future.result()
+                if guid:
+                    checked[guid] = (image_url, result)
                 if guid and image_url:
                     fetched[guid] = image_url
                 outcomes[result] = outcomes.get(result, 0) + 1
@@ -170,10 +172,15 @@ def main():
         csv_guids = [row.get("guid") for row in rows if row.get("guid")]
         db_rows = db.query(Article).filter(Article.guid.in_(csv_guids)).all() if csv_guids else []
         db_by_guid = {article.guid: article for article in db_rows}
-        for guid, image_url in fetched.items():
+        for guid, (image_url, result) in checked.items():
             article = db_by_guid.get(guid)
-            if article and (args.refresh or not article.image_url):
+            if article and image_url and (args.refresh or not article.image_url):
                 article.image_url = image_url
+                db_by_guid[guid] = article
+            elif article and args.refresh and result in {"ok", "title_mismatch"}:
+                # A successful page check with no verified article image must
+                # clear a previously stored, potentially unrelated thumbnail.
+                article.image_url = None
                 db_by_guid[guid] = article
         db.commit()
     except Exception:
@@ -185,8 +192,8 @@ def main():
     synced = 0
     for row in rows:
         article = db_by_guid.get(row.get("guid"))
-        if article and article.image_url:
-            row["image_url"] = article.image_url
+        if article and (args.refresh or article.image_url):
+            row["image_url"] = article.image_url or ""
             synced += 1
     write_csv_atomic(args.csv, fieldnames, rows)
     print(f"Images fetched: {len(fetched)}; CSV rows synced from PostgreSQL: {synced}")

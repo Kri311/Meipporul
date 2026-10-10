@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Re-fetch 2026 rows from raw_processed.csv and export clean Trafilatura data."""
+"""Re-fetch eligible rows from the canonical preprocessed news dataset."""
 
 import argparse
 import csv
@@ -32,7 +32,7 @@ from backend.ingestion.tasks.text_cleaning import (  # noqa: E402
 )
 
 DATA_DIR = os.path.join(PROJECT_ROOT, "src", "backend", "data")
-DEFAULT_INPUT = os.path.join(DATA_DIR, "raw_processed.csv")
+DEFAULT_INPUT = os.path.join(DATA_DIR, "trafiltura_preprocessed.csv")
 DEFAULT_OUTPUT = os.path.join(DATA_DIR, "trafiltura_processed.csv")
 FIELDNAMES = [
     "content_hash", "guid", "outlet_slug", "title", "description", "author",
@@ -260,7 +260,7 @@ def export_2026(input_path=DEFAULT_INPUT, output_path=DEFAULT_OUTPUT, batch_size
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", default=DEFAULT_INPUT, help="Source CSV (default: backend/data/raw_processed.csv)")
+    parser.add_argument("--input", default=DEFAULT_INPUT, help="Source CSV (default: backend/data/trafiltura_preprocessed.csv)")
     parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Output CSV (default: backend/data/trafiltura_processed.csv)")
     parser.add_argument("--batch-size", type=int, default=50, help="Progress checkpoint interval; does not limit total rows")
     parser.add_argument("--timeout", type=int, default=20, help="Per-article HTTP timeout in seconds")

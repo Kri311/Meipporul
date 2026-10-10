@@ -1,11 +1,10 @@
-import json
 import csv
 import os
 import re
 import hashlib
 import urllib.parse
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 import feedparser
@@ -16,6 +15,8 @@ from backend.ingestion.main import celery_app
 from backend.models.database import SessionLocal, RssFeed, FeedRun, Article
 from backend.ingestion.tasks.text_cleaning import (
     clean_html, deep_clean_text, detect_language, get_canonical_url,
+    is_recent_feed_date, normalize_news_datetime,
+    article_page_matches_title,
     SKIP_KEYWORDS, FESTIVAL_KEYWORDS, BREAKING_NEWS_KEYWORDS,
     classify_topic, apply_outlet_cleaners,
     normalize_political_parties,
@@ -27,8 +28,7 @@ CSV_FIELDNAMES = [
     "content_hash", "guid", "outlet_slug", "title", "description", "author",
     "published_at", "language", "article_length", "data_fetch_via",
     "canonical_url", "extraction_method", "extraction_quality",
-    "processing_status", "raw_text", "clean_text", "topic", "cluster_id",
-    "semantic_text_hash", "named_entities", "embedding",
+    "processing_status", "raw_text", "clean_text", "topic", "image_url",
 ]
 
 
@@ -60,23 +60,8 @@ def extract_entry_image(entry, page_html=None, page_url=""):
         image = soup.select_one("article img[src], main img[src]")
         if image and usable(image.get("src")):
             return usable(image.get("src"))
-    for field in ("media_content", "media_thumbnail"):
-        for media in getattr(entry, field, []) or []:
-            if usable(media.get("url")):
-                return usable(media.get("url"))
-    for link in getattr(entry, "links", []) or []:
-        if "image" in (link.get("type") or "") and link.get("href"):
-            if usable(link["href"]):
-                return usable(link["href"])
-    for field in ("description", "content"):
-        value = getattr(entry, field, "")
-        if isinstance(value, list):
-            value = value[0].get("value", "") if value else ""
-        soup = BeautifulSoup(value or "", "html.parser")
-        image = soup.find("img", src=True)
-        if image:
-            if usable(image.get("src")):
-                return usable(image.get("src"))
+    # RSS thumbnails may be generic feed art or belong to a neighboring story.
+    # Missing a picture is preferable to showing an unverified association.
     return None
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
@@ -155,14 +140,15 @@ def process_single_feed(self, feed_id: int):
             # Determine Publish Date
             pub_date = None
             if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                pub_date = datetime(*entry.published_parsed[:6])
+                # feedparser normalizes parsed tuples to UTC but drops tzinfo.
+                pub_date = normalize_news_datetime(datetime(*entry.published_parsed[:6], tzinfo=timezone.utc))
             elif hasattr(entry, 'published'):
                 try:
-                    pub_date = parsedate_to_datetime(entry.published)
+                    pub_date = normalize_news_datetime(parsedate_to_datetime(entry.published))
                 except Exception:
                     pub_date = None
 
-            if not pub_date or pub_date.year != 2026:
+            if not is_recent_feed_date(pub_date):
                 continue
 
             # Architecture Check: RSS Content vs Trafilatura
@@ -179,6 +165,8 @@ def process_single_feed(self, feed_id: int):
             extraction_method = "rss"
             extraction_quality = 0.0
             downloaded = None
+            page_url = canonical_url
+            page_title_mismatch = False
             
             # If the RSS text is less than 500 chars, it's a snippet. We must scrape the URL.
             if True:
@@ -189,6 +177,10 @@ def process_single_feed(self, feed_id: int):
                     }
                     resp = requests.get(canonical_url, headers=headers, timeout=10)
                     downloaded = resp.content if resp.status_code == 200 else None
+                    page_url = resp.url or canonical_url
+                    if downloaded and not article_page_matches_title(downloaded, title):
+                        page_title_mismatch = True
+                        downloaded = None
                 except Exception:
                     downloaded = None
 
@@ -205,10 +197,10 @@ def process_single_feed(self, feed_id: int):
                         extraction_method = "trafilatura"
                         extraction_quality = 0.9 # High confidence full article
 
-            image_url = extract_entry_image(entry, downloaded, canonical_url)
+            image_url = extract_entry_image(entry, downloaded, page_url)
             
             # Fallback to RSS text if Trafilatura fails or if RSS had the full text (>500 chars)
-            if not final_text:
+            if not final_text and not page_title_mismatch:
                 final_text = deep_clean_text(clean_rss_text)
                 extraction_quality = 0.5
             
@@ -298,11 +290,12 @@ def process_single_feed(self, feed_id: int):
                 feed_run.entries_failed += 1
                 continue
             
-            # --- Save to unified raw_processed.csv ---
+            # Keep the canonical processed dataset current as each RSS article
+            # passes extraction, cleaning, language detection, and quality gates.
             csv_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data")
             os.makedirs(csv_dir, exist_ok=True)
-            
-            csv_path = os.path.join(csv_dir, "raw_processed.csv")
+
+            csv_path = os.path.join(csv_dir, "trafiltura_preprocessed.csv")
             
             file_exists = os.path.exists(csv_path) and os.path.getsize(csv_path) > 0
             with open(csv_path, "a", newline="", encoding="utf-8-sig") as csvfile:
@@ -333,10 +326,7 @@ def process_single_feed(self, feed_id: int):
                     "raw_text": rss_content_html,
                     "clean_text": formatted_clean_text,
                     "topic": topic,
-                    "cluster_id": "",
-                    "semantic_text_hash": "",
-                    "named_entities": json.dumps({"LOCATION": [loc]} if loc else {}, ensure_ascii=False),
-                    "embedding": "",
+                    "image_url": image_url or "",
                 })
             # -------------------
 

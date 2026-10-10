@@ -7,6 +7,7 @@ import sys
 import os
 import json
 import re
+import numpy as np
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
@@ -21,6 +22,10 @@ from backend.summarization.english import summarize_event_preview_bullets as sum
 from backend.summarization.tamil import summarize_event_preview_bullets as summarize_tamil_preview_bullets
 
 app = FastAPI()
+
+EVENT_MIN_PAIRWISE_SIMILARITY = float(os.getenv("CLUSTER_MIN_PAIRWISE_SIMILARITY", "0.88"))
+EVENT_MAX_ARTICLES = int(os.getenv("CLUSTER_MAX_ARTICLES", "50"))
+EVENT_MAX_GAP_DAYS = int(os.getenv("CLUSTER_MAX_GAP_DAYS", "14"))
 
 TOPIC_LABELS_TA = {
     "world_news": "உலக செய்திகள்", "politics": "அரசியல்",
@@ -51,12 +56,75 @@ def published_sort_key(article):
     return article.published_at.timestamp() if article.published_at else 0
 
 
+def _cluster_is_cohesive(articles):
+    """Fail closed when persisted cluster members cannot support one event.
+
+    This protects the feed while old cluster assignments await a new clustering
+    pass, and keeps mixed summaries/entities/images out of event detail pages.
+    """
+    if len(articles) <= 1:
+        return True
+    if len(articles) > EVENT_MAX_ARTICLES:
+        return False
+
+    languages = {str(article.language or "").casefold().split("-")[0] for article in articles}
+    if len(languages) != 1:
+        return False
+
+    dates = [article.published_at for article in articles if article.published_at]
+    if len(dates) != len(articles):
+        return False
+    if (max(dates) - min(dates)).days > EVENT_MAX_GAP_DAYS:
+        return False
+
+    vectors = []
+    for article in articles:
+        if article.embedding is None:
+            return False
+        vector = np.asarray(article.embedding, dtype=float)
+        norm = np.linalg.norm(vector)
+        if vector.shape != (768,) or not norm or not np.isfinite(norm):
+            return False
+        vectors.append(vector / norm)
+
+    try:
+        matrix = np.vstack(vectors)
+    except ValueError:
+        return False
+    similarities = matrix @ matrix.T
+    upper = similarities[np.triu_indices(len(articles), k=1)]
+    return bool(upper.size and np.isfinite(upper).all() and upper.min() >= EVENT_MIN_PAIRWISE_SIMILARITY)
+
+
+def _representative_article(articles):
+    """Use the cluster medoid, not an arbitrary query-order row."""
+    if not articles:
+        return None
+    vectors = [np.asarray(article.embedding, dtype=float) for article in articles if article.embedding is not None]
+    if len(vectors) != len(articles):
+        return articles[0]
+    if any(vector.shape != (768,) or not np.isfinite(vector).all() for vector in vectors):
+        return articles[0]
+    centroid = np.mean(vectors, axis=0)
+    norm = np.linalg.norm(centroid)
+    if not norm:
+        return articles[0]
+    centroid = centroid / norm
+    return max(articles, key=lambda article: float(np.dot(np.asarray(article.embedding, dtype=float), centroid)))
+
+
+def _representative_title(articles, fallback=""):
+    representative = _representative_article(articles)
+    return (representative.title if representative else "") or fallback
+
+
 def _article_event(event_id, title, articles, language, topic=None):
     """Build a cheap event-card preview; full abstractive inference is detail-only."""
     articles = sorted(articles, key=published_sort_key, reverse=True)
+    representative = _representative_article(articles)
     summary_text = summarize_tamil_preview(articles) if language == "ta" else summarize_english_preview(articles)
     bullets = summarize_tamil_preview_bullets(articles) if language == "ta" else summarize_english_preview_bullets(articles)
-    first_image = next((a.image_url for a in articles if a.image_url), None)
+    first_image = representative.image_url if representative else None
     if not topic:
         sample_body = " ".join(get_article_body(a.clean_text, a.title)[:500] for a in articles[:3])
         topic = classify_topic(title, sample_body)
@@ -134,7 +202,6 @@ def _is_displayable(article):
 @app.get("/events/")
 def get_events(lang: str = Query("en"), db: Session = Depends(get_db)):
     lang = "ta" if lang == "ta" else "en"
-    from datetime import datetime
 
     # Read article rows directly, not only the latest N cluster rows. During
     # reprocessing, new/cleaned articles may temporarily have no cluster_id.
@@ -142,8 +209,7 @@ def get_events(lang: str = Query("en"), db: Session = Depends(get_db)):
         joinedload(Article.outlet), joinedload(Article.cluster)
     ).filter(
         func.lower(Article.language).in_(language_codes(lang)),
-        Article.published_at >= datetime(2026, 1, 1),
-        Article.published_at < datetime(2027, 1, 1),
+        Article.published_at.isnot(None),
         Article.clean_text.isnot(None),
     ).all()
     articles = [article for article in articles if _is_displayable(article)]
@@ -159,27 +225,30 @@ def get_events(lang: str = Query("en"), db: Session = Depends(get_db)):
     dated_events = []
     for cluster_id, members in by_cluster.items():
         cluster = members[0].cluster
+        if not _cluster_is_cohesive(members):
+            # An invalid legacy assignment must not mix titles, summaries,
+            # article images, sources, or NER entities in the public feed.
+            standalone.extend(members)
+            continue
         dated_events.append((
             max((published_sort_key(a) for a in members), default=0),
-            _article_event(cluster_id, members[0].title or cluster.representative_title, members, lang, cluster.topic),
+            _article_event(cluster_id, _representative_title(members, cluster.representative_title), members, lang, cluster.topic),
         ))
     for article in standalone:
         # Negative IDs reserve a collision-free namespace for temporary items.
         dated_events.append((published_sort_key(article), _article_event(-article.id, article.title, [article], lang)))
     dated_events.sort(key=lambda item: item[0], reverse=True)
-    return [event for _, event in dated_events[:300]]
+    return [event for _, event in dated_events]
 
 @app.get("/events/{event_id}")
 def get_event(event_id: int, lang: str = Query("en"), db: Session = Depends(get_db)):
     lang = "ta" if lang == "ta" else "en"
-    from datetime import datetime
 
     if event_id < 0:
         article = db.query(Article).options(joinedload(Article.outlet)).filter(
             Article.id == -event_id,
             func.lower(Article.language).in_(language_codes(lang)),
-            Article.published_at >= datetime(2026, 1, 1),
-            Article.published_at < datetime(2027, 1, 1),
+            Article.published_at.isnot(None),
             Article.clean_text.isnot(None),
         ).first()
         if not article:
@@ -193,16 +262,18 @@ def get_event(event_id: int, lang: str = Query("en"), db: Session = Depends(get_
         arts = db.query(Article).options(joinedload(Article.outlet)).filter(
             Article.cluster_id == c.id,
             func.lower(Article.language).in_(language_codes(lang)),
-            Article.published_at >= datetime(2026, 1, 1),
-            Article.published_at < datetime(2027, 1, 1),
+            Article.published_at.isnot(None),
             Article.clean_text.isnot(None),
         ).all()
     arts = [article for article in arts if _is_displayable(article)]
     if not arts:
         return {"error": "not found"}
+    if event_id >= 0 and not _cluster_is_cohesive(arts):
+        return {"error": "not found"}
     arts.sort(key=published_sort_key, reverse=True)
     
-    image_url = next((a.image_url for a in arts if a.image_url), None)
+    representative = _representative_article(arts)
+    image_url = representative.image_url if representative else None
     summary_bullets = summarize_tamil_bullets(arts) if lang == "ta" else summarize_english_bullets(arts)
     summary_text = " ".join(summary_bullets)
             
@@ -244,8 +315,13 @@ def get_event(event_id: int, lang: str = Query("en"), db: Session = Depends(get_
                     if name:
                         entities[key].add(name)
                 
-    title = arts[0].title or (c.representative_title if c else "")
-    topic = topic_label(c.topic if c else "general", lang)
+    title = _representative_title(arts, c.representative_title if c else "")
+    if event_id < 0:
+        article_body = get_article_body(arts[0].clean_text, arts[0].title)
+        topic_value = classify_topic(arts[0].title, article_body)
+    else:
+        topic_value = c.topic if c else "general"
+    topic = topic_label(topic_value, lang)
     
     return {
         "id": event_id,

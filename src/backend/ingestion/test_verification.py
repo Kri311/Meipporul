@@ -7,7 +7,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'ingestion'))
 from models.database import SessionLocal, Article
 
 def verify_counts():
-    csv_file = 'data/raw_processed.csv'
+    csv_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'trafiltura_preprocessed.csv')
     
     # 1. Count actual CSV rows (Properly handling multi-line strings)
     try:

@@ -2,10 +2,11 @@
 """
 Veritas Lens — Standalone RSS Feed Fetcher
 
-Fetches articles from ALL enabled RSS feeds defined in config/sources.yaml
-and writes them directly to data/raw_processed.csv.
+Fetches articles from ALL enabled RSS feeds defined in config/sources.yaml,
+cleans and quality-checks them, stores them in PostgreSQL, and appends the
+processed records to data/trafiltura_preprocessed.csv.
 
-NO Celery, Redis, or PostgreSQL required.
+This command requires PostgreSQL; it does not require Celery or Redis.
 
 Uses the exact same text cleaning, filtering, and extraction logic
 as the Celery-based pipeline (ingestion/tasks/fetch_feed.py).
@@ -19,7 +20,6 @@ Quality gates:
 
 Usage:
     python fetch_rss_standalone.py              # Fetch ALL available articles
-    python fetch_rss_standalone.py --fresh      # Start with a fresh CSV
     python fetch_rss_standalone.py --limit 50   # Optionally cap at N articles
 """
 
@@ -35,7 +35,7 @@ import re
 import sys
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
 import feedparser
@@ -52,6 +52,8 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from backend.ingestion.tasks.text_cleaning import (
     clean_html, deep_clean_text, detect_language, get_canonical_url,
+    is_recent_feed_date, normalize_news_datetime,
+    article_page_matches_title,
     SKIP_KEYWORDS, FESTIVAL_KEYWORDS, BREAKING_NEWS_KEYWORDS,
     classify_topic, apply_outlet_cleaners,
     normalize_political_parties,
@@ -64,11 +66,11 @@ CSV_FIELDNAMES = [
     "content_hash", "guid", "outlet_slug", "title", "description",
     "author", "published_at", "language", "article_length",
     "data_fetch_via", "canonical_url", "extraction_method",
-    "extraction_quality", "processing_status", "raw_text", "clean_text", "topic",
-    "cluster_id", "semantic_text_hash", "named_entities", "embedding"
+    "extraction_quality", "processing_status", "raw_text", "clean_text",
+    "topic", "image_url",
 ]
 
-CSV_PATH = os.path.join(PROJECT_ROOT, "src", "backend", "data", "raw_processed.csv")
+CSV_PATH = os.path.join(PROJECT_ROOT, "src", "backend", "data", "trafiltura_preprocessed.csv")
 CONFIG_PATH = os.path.join(PROJECT_ROOT, "src", "backend", "config", "sources.yaml")
 
 # Minimum clean text length to accept an article (quality gate)
@@ -149,25 +151,16 @@ def should_skip_entry(title_lower, url_lower):
     return False
 
 
-def extract_image_url(entry):
-    if hasattr(entry, "media_content"):
-        for media in entry.media_content:
-            if "url" in media: return media["url"]
-    if hasattr(entry, "media_thumbnail"):
-        for media in entry.media_thumbnail:
-            if "url" in media: return media["url"]
-    if hasattr(entry, "links"):
-        for link in entry.links:
-            if "image" in link.get("type", ""): return link.get("href")
-    desc = getattr(entry, "description", "")
-    if desc:
-        match = re.search(r"<img[^>]+src=\"([^\">]+)\"", desc)
-        if match: return match.group(1)
-    content = getattr(entry, "content", [])
-    if content:
-        match = re.search(r"<img[^>]+src=\"([^\">]+)\"", content[0].value)
-        if match: return match.group(1)
-    return None
+def _usable_image_url(url, base_url=""):
+    if not url:
+        return None
+    absolute = urllib.parse.urljoin(base_url, str(url).strip())
+    parsed = urllib.parse.urlparse(absolute)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    if any(token in parsed.path.casefold() for token in ("logo", "avatar", "icon", "sprite", "placeholder", "default-image")):
+        return None
+    return absolute
 
 
 def extract_page_image(downloaded, url=""):
@@ -181,15 +174,17 @@ def extract_page_image(downloaded, url=""):
             if node is None:
                 node = soup.find("meta", attrs={"name": key})
             if node is not None and node.get("content"):
-                return urllib.parse.urljoin(url, node["content"].strip())
+                image = _usable_image_url(node["content"], url)
+                if image:
+                    return image
         image = soup.select_one("article img[src], main img[src]")
         if image:
-            return urllib.parse.urljoin(url, image["src"])
+            return _usable_image_url(image["src"], url)
     except Exception:
         pass
     return None
 
-def extract_article_text(entry, canonical_url):
+def extract_article_text(entry, canonical_url, expected_title=""):
     """
     Extract article text from an RSS entry.
     Falls back to Trafilatura if the RSS content is too short (<500 chars).
@@ -210,16 +205,22 @@ def extract_article_text(entry, canonical_url):
 
     # Always scrape the full article with Trafilatura to ensure completeness
     page_image = None
+    page_url = canonical_url
     if True:
         try:
             resp = requests.get(canonical_url, headers=HTTP_HEADERS, timeout=10)
             # Use content (bytes) to let Trafilatura handle encoding properly
             downloaded = resp.content if resp.status_code == 200 else None
+            page_url = resp.url or canonical_url
         except Exception:
             downloaded = None
 
         if downloaded:
-            page_image = extract_page_image(downloaded, canonical_url)
+            if not article_page_matches_title(downloaded, expected_title):
+                # Do not attach another story's text or image through a stale
+                # link or an unexpected publisher redirect.
+                return "", "title_mismatch", 0.0, rss_content_html, None
+            page_image = extract_page_image(downloaded, page_url)
             extracted_text = trafilatura.extract(
                 downloaded, favor_recall=True, include_comments=False,
                 include_tables=False
@@ -245,10 +246,11 @@ def extract_article_text(entry, canonical_url):
 def parse_pub_date(entry):
     """Extract publish date from an RSS entry."""
     if hasattr(entry, "published_parsed") and entry.published_parsed:
-        return datetime(*entry.published_parsed[:6])
+        # feedparser normalizes parsed tuples to UTC but drops tzinfo.
+        return normalize_news_datetime(datetime(*entry.published_parsed[:6], tzinfo=timezone.utc))
     elif hasattr(entry, "published"):
         try:
-            return parsedate_to_datetime(entry.published)
+            return normalize_news_datetime(parsedate_to_datetime(entry.published))
         except Exception:
             return None
     return None
@@ -318,9 +320,8 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
             title = getattr(entry, "title", "")
             clean_title = clean_article_title(title)
             pub_date = parse_pub_date(entry)
-            # The current production dataset is intentionally scoped to 2026;
-            # never silently stamp an undated/old item as current news.
-            if not pub_date or pub_date.year != 2026:
+            # Keep feed ingestion current while retaining already stored history.
+            if not is_recent_feed_date(pub_date):
                 continue
             
             # 2. Canonical URL Deduplication
@@ -329,8 +330,12 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
                 continue
 
             # Extract and clean article text
-            final_text, extraction_method, extraction_quality, rss_content_html, page_image = extract_article_text(entry, canonical_url)
-            image_url = extract_image_url(entry) or page_image
+            final_text, extraction_method, extraction_quality, rss_content_html, page_image = extract_article_text(
+                entry, canonical_url, clean_title
+            )
+            # Only attach an image parsed from the article page itself. RSS
+            # media can be feed artwork or a neighboring story's thumbnail.
+            image_url = page_image
 
             # Quality gate: skip articles with insufficient content
             if not final_text or len(final_text) < MIN_CLEAN_TEXT_LENGTH:
@@ -406,6 +411,7 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
                 "language": detected_lang,
                 "article_length": article_length_cat,
                 "data_fetch_via": data_fetch_via,
+                "original_url": original_url,
                 "canonical_url": canonical_url,
                 "extraction_method": extraction_method,
                 "extraction_quality": extraction_quality,
@@ -472,7 +478,7 @@ def run_fetch_cycle(args, existing_guids, content_hashes, existing_urls, sources
                     outlet_id=outlet.id,
                     guid=article_dict['guid'],
                     canonical_url=article_dict['canonical_url'],
-                    original_url=article_dict['canonical_url'],
+                    original_url=article_dict.get('original_url') or article_dict['canonical_url'],
                     title=article_dict['title'],
                     description=article_dict['description'],
                     author=article_dict['author'],
@@ -558,15 +564,11 @@ def run_fetch_cycle(args, existing_guids, content_hashes, existing_urls, sources
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Standalone RSS fetcher for Veritas Lens - writes directly to data/raw_processed.csv"
+        description="Fetch, clean, and append RSS articles to trafiltura_preprocessed.csv"
     )
     parser.add_argument(
         "--limit", type=int, default=None,
         help="Optional: cap the number of new articles to fetch (default: no limit, fetch all)"
-    )
-    parser.add_argument(
-        "--fresh", action="store_true",
-        help="Start with a fresh CSV (deletes existing data)"
     )
     parser.add_argument(
         "--interval", type=int, default=None,
@@ -579,11 +581,6 @@ def main():
 
     # Ensure data directory exists
     os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
-
-    # Handle --fresh flag
-    if args.fresh and os.path.exists(CSV_PATH):
-        os.remove(CSV_PATH)
-        print(f"Deleted existing {CSV_PATH}")
 
     # Load existing identifiers for deduplication
     existing_guids, content_hashes, existing_urls = load_existing_data()

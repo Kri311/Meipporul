@@ -14,12 +14,52 @@ Functions:
 """
 
 import re
+import os
 import urllib.parse
 import requests
 from bs4 import BeautifulSoup
 import html
 import json
 from difflib import SequenceMatcher
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+
+NEWS_TIMEZONE = ZoneInfo("Asia/Kolkata")
+
+
+def normalize_news_datetime(published_at):
+    """Store publication timestamps as naive Asia/Kolkata wall time.
+
+    The SQLAlchemy column is timezone-naive, so normalize aware feed dates
+    before persistence to avoid silently mixing UTC and local timestamps.
+    """
+    if published_at and published_at.tzinfo is not None:
+        return published_at.astimezone(NEWS_TIMEZONE).replace(tzinfo=None)
+    return published_at
+
+
+def is_recent_feed_date(published_at, max_age_days=None, now=None):
+    """Accept dated RSS items in the rolling freshness window, using India time.
+
+    Old articles already stored in the database remain available as history;
+    this guard only prevents a feed's stale archive entries being ingested as
+    fresh news. Set RSS_MAX_AGE_DAYS to widen/narrow the feed lookback.
+    """
+    if not published_at:
+        return False
+    try:
+        max_age_days = int(max_age_days if max_age_days is not None else os.getenv("RSS_MAX_AGE_DAYS", "7"))
+        current = now or datetime.now(NEWS_TIMEZONE)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=NEWS_TIMEZONE)
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=NEWS_TIMEZONE)
+        published_date = published_at.astimezone(NEWS_TIMEZONE).date()
+        age = (current.astimezone(NEWS_TIMEZONE).date() - published_date).days
+        return 0 <= age <= max_age_days
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def clean_html(raw_html):
@@ -37,6 +77,43 @@ def clean_article_title(title):
     """Return a plain, single-line title with markup and control characters removed."""
     title = clean_html(title)
     return re.sub(r"\s+", " ", title).strip()
+
+
+def article_titles_match(expected, candidate):
+    """Conservatively detect when a fetched page is for a different headline."""
+    expected = clean_article_title(expected).casefold()
+    candidate = clean_article_title(candidate).casefold()
+    if not expected or not candidate:
+        return True
+    expected_tokens = re.findall(r"[\w\u0B80-\u0BFF]+", expected, flags=re.UNICODE)
+    candidate_tokens = set(re.findall(r"[\w\u0B80-\u0BFF]+", candidate, flags=re.UNICODE))
+    if not expected_tokens:
+        return True
+    shared = sum(token in candidate_tokens for token in expected_tokens)
+    token_coverage = shared / len(expected_tokens)
+    sequence_score = SequenceMatcher(None, expected, candidate).ratio()
+    return sequence_score >= 0.48 or (len(expected_tokens) >= 3 and token_coverage >= 0.55)
+
+
+def article_page_matches_title(page_html, expected_title):
+    """Check publisher metadata/headlines before trusting extracted page data."""
+    if not page_html:
+        return True
+    soup = BeautifulSoup(page_html, "html.parser")
+    candidates = []
+    for key in ("og:title", "twitter:title"):
+        node = soup.find("meta", property=key) or soup.find("meta", attrs={"name": key})
+        if node and node.get("content"):
+            candidates.append(node["content"])
+    for node in soup.select("h1")[:3]:
+        text = node.get_text(" ", strip=True)
+        if text:
+            candidates.append(text)
+    if soup.title and soup.title.get_text(strip=True):
+        candidates.append(soup.title.get_text(" ", strip=True))
+    if not candidates:
+        return True
+    return any(article_titles_match(expected_title, candidate) for candidate in candidates)
 
 
 def clean_article_body(body, title="", language=None):
