@@ -1,8 +1,9 @@
 # Project Journal: Tamil News Bias-Aware Aggregator
 
 > Research proposal and historical notes; not a statement of current deployed
-> behavior. See the root README and ARTICLE_REPROCESSING.md for the active
-> pipeline contract. In particular, embeddings are not translations.
+> behavior. See the root README.md and REPORT.md for the active pipeline
+> contract; ARTICLE_REPROCESSING.md documents only the separate historical
+> URL refresh tool. In particular, embeddings are not translations.
 
 This project aims to build a **Tamil news aggregator** that collects important Tamil-language news from major outlets and displays them grouped by event with bias annotations, inspired by Ground News. The system will highlight how different outlets report the same event, and will include a “Blindspot” section for stories covered predominantly by one bias category. We will label each source’s bias (e.g. Pro-Dravidian, Opposition (TVK/AIADMK/BJP), Conservative, Independent) using curated ratings from independent media-monitoring organizations or research. The product will support both Tamil and English content (for example, English summaries of Tamil news) and will be fully containerized for development and deployment (Docker). 
 

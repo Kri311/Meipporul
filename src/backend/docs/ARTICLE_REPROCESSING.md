@@ -1,5 +1,9 @@
 # Article extraction and export
 
+This document describes the separate historical URL reprocessing utility.
+For the live RSS → NER → E5/DBSCAN → topic → persisted summaries workflow,
+use the repository [README](../../../README.md) and [implementation report](../../../REPORT.md).
+
 The live RSS pipeline and historical reprocessor use Trafilatura to extract
 article pages. RSS description is retained independently in description;
 clean_text is serialized JSON in the shape {"actual headline":"article body"}.
@@ -29,8 +33,8 @@ checkpoint batches, skips inaccessible/non-HTML pages and articles without a
 usable body, and writes the final 21-column schema to
 src/backend/data/trafiltura_processed.csv.
 
-When the body is refreshed, old derived cluster_id, semantic_text_hash, and
-embedding values are cleared. named_entities starts with any extracted
+When the body is refreshed, old derived cluster_id and embedding values are
+cleared. named_entities starts with any extracted
 LOCATION; the NER pipeline can then enrich that value. description and other
 source metadata are retained where available. Output is first written to a
 sibling .tmp file and atomically replaces the CSV only after a successful run.

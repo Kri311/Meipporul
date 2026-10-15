@@ -37,7 +37,6 @@ sources:
   fetch_interval_minutes: 15
   rate_limit_per_minute: 30
   category: general
-  topic_override: world_news
 - slug: times_of_india
   name: Times of India (Chennai)
   language: en

@@ -1,10 +1,34 @@
 import os
 from datetime import datetime
+from pathlib import Path
 from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey, JSON, text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from pgvector.sqlalchemy import Vector
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://veritas_admin:veritas@localhost:5432/veritas_lens")
+# Load simple KEY=value entries for direct Python invocations too. Existing
+# shell environment variables take precedence; no dotenv dependency is needed.
+env_path = Path(__file__).resolve().parents[3] / ".env"
+if env_path.is_file():
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if key and key.replace("_", "a").isalnum() and key not in os.environ:
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            os.environ[key] = value
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    user = os.getenv("POSTGRES_USER", "veritas_admin")
+    # Keep the fallback aligned with setup_local_infra.sh and .env.example.
+    password = os.getenv("POSTGRES_PASSWORD", "veritas_secret_password")
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    database = os.getenv("POSTGRES_DB", "veritas_lens")
+    DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{database}"
 
 engine = create_engine(DATABASE_URL, echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -61,6 +85,13 @@ class NewsCluster(Base):
     algorithm = Column(String, nullable=True)
     algorithm_version = Column(String, nullable=True)
     embedding_model_version = Column(String, nullable=True)
+    summary_en_bullets = Column(JSON, nullable=True)
+    summary_ta_bullets = Column(JSON, nullable=True)
+    # Bilingual event-level bullet summary exposed to exports and clients.
+    summary = Column(JSON, nullable=True)
+    summary_en_hash = Column(String, nullable=True)
+    summary_ta_hash = Column(String, nullable=True)
+    summary_generated_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     articles = relationship("Article", back_populates="cluster")
@@ -116,10 +147,12 @@ class Article(Base):
     raw_text = Column(Text, nullable=True)
     clean_text = Column(Text, nullable=True)
     content_hash = Column(String, nullable=True)
-    semantic_text_hash = Column(String, nullable=True)
     extraction_method = Column(String, nullable=True)
     extraction_quality = Column(Float, nullable=True)
     processing_status = Column(String, default="pending")
+    topic = Column(String, nullable=True)
+    topic_confidence = Column(Float, nullable=True)
+    topic_model = Column(String, nullable=True)
     cluster_id = Column(Integer, ForeignKey("news_clusters.id"), nullable=True)
     cluster = relationship("NewsCluster", back_populates="articles")
     embedding = Column(Vector(768), nullable=True)
@@ -127,6 +160,13 @@ class Article(Base):
     embedding_created_at = Column(DateTime, nullable=True)
     named_entities = Column(JSON, nullable=True)
     linked_entities = Column(JSON, nullable=True)
+    summary_en_bullets = Column(JSON, nullable=True)
+    summary_ta_bullets = Column(JSON, nullable=True)
+    # Per-article bullets in the source language (the CSV/API-facing summary).
+    summary = Column(JSON, nullable=True)
+    summary_en_hash = Column(String, nullable=True)
+    summary_ta_hash = Column(String, nullable=True)
+    summary_generated_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     outlet = relationship("Outlet", back_populates="articles")
@@ -137,7 +177,67 @@ def init_db():
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         conn.commit()
     Base.metadata.create_all(bind=engine)
-    print("Database tables created successfully!")
+    # create_all does not add columns to tables that already exist. Keep this
+    # additive migration here so both the API and standalone pipeline commands
+    # can safely upgrade an existing local database.
+    migrations = {
+        "news_clusters": {
+            "summary_en_bullets": "JSONB",
+            "summary_ta_bullets": "JSONB",
+            "summary": "JSONB",
+            "summary_en_hash": "VARCHAR",
+            "summary_ta_hash": "VARCHAR",
+            "summary_generated_at": "TIMESTAMP",
+        },
+        "articles": {
+            "summary_en_bullets": "JSONB",
+            "summary_ta_bullets": "JSONB",
+            "summary": "JSONB",
+            "summary_en_hash": "VARCHAR",
+            "summary_ta_hash": "VARCHAR",
+            "summary_generated_at": "TIMESTAMP",
+            "topic": "VARCHAR",
+            "topic_confidence": "DOUBLE PRECISION",
+            "topic_model": "VARCHAR",
+        },
+    }
+    with engine.begin() as conn:
+        for table, columns in migrations.items():
+            for name, sql_type in columns.items():
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {sql_type}"
+                ))
+        # This was an internal cache key, not user-visible data. Embeddings are
+        # now invalidated by content normalization/model mismatch and do not
+        # depend on a separate semantic_text_hash column.
+        conn.execute(text("ALTER TABLE articles DROP COLUMN IF EXISTS semantic_text_hash"))
+
+    # Confirm the additive migration reached the same schema that ORM queries
+    # will use. Fail at startup with an actionable error instead of allowing a
+    # later SELECT to fail with UndefinedColumn.
+    expected = {
+        "articles": {"summary_en_bullets", "summary_ta_bullets", "summary", "summary_en_hash",
+                     "summary_ta_hash", "summary_generated_at"},
+        "news_clusters": {"summary_en_bullets", "summary_ta_bullets", "summary", "summary_en_hash",
+                           "summary_ta_hash", "summary_generated_at"},
+    }
+    with engine.connect() as conn:
+        missing = {}
+        for table, required_columns in expected.items():
+            found = set(conn.execute(text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = :table"
+            ), {"table": table}).scalars())
+            absent = required_columns - found
+            if absent:
+                missing[table] = sorted(absent)
+    if missing:
+        raise RuntimeError(
+            "Database schema migration did not add required summary columns: "
+            f"{missing}. Verify DATABASE_URL points to the intended database and "
+            "that its user can ALTER TABLE, then rerun `python -m backend.models.database`."
+        )
+    print("Database tables and summary columns are ready.")
 
 if __name__ == "__main__":
     from sqlalchemy import text

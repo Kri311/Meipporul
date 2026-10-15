@@ -44,7 +44,7 @@ import trafilatura
 import yaml
 import json
 from bs4 import BeautifulSoup
-from backend.models.database import SessionLocal, Article, Outlet, RssFeed
+from backend.models.database import SessionLocal, Article, Outlet, RssFeed, init_db
 
 # Ensure project root is in the Python path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -52,7 +52,7 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from backend.ingestion.tasks.text_cleaning import (
     clean_html, deep_clean_text, detect_language, get_canonical_url,
-    is_recent_feed_date, normalize_news_datetime,
+    normalize_news_datetime,
     article_page_matches_title,
     SKIP_KEYWORDS, FESTIVAL_KEYWORDS, BREAKING_NEWS_KEYWORDS,
     classify_topic, apply_outlet_cleaners,
@@ -62,14 +62,6 @@ from backend.ingestion.tasks.text_cleaning import (
 )
 
 # ─── Constants ───
-CSV_FIELDNAMES = [
-    "content_hash", "guid", "outlet_slug", "title", "description",
-    "author", "published_at", "language", "article_length",
-    "data_fetch_via", "canonical_url", "extraction_method",
-    "extraction_quality", "processing_status", "raw_text", "clean_text",
-    "topic", "image_url",
-]
-
 CSV_PATH = os.path.join(PROJECT_ROOT, "src", "backend", "data", "trafiltura_preprocessed.csv")
 CONFIG_PATH = os.path.join(PROJECT_ROOT, "src", "backend", "config", "sources.yaml")
 
@@ -321,9 +313,6 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
             clean_title = clean_article_title(title)
             pub_date = parse_pub_date(entry)
             # Keep feed ingestion current while retaining already stored history.
-            if not is_recent_feed_date(pub_date):
-                continue
-            
             # 2. Canonical URL Deduplication
             if canonical_url and (outlet_slug, canonical_url) in existing_urls:
                 skipped_dup += 1
@@ -333,6 +322,13 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
             final_text, extraction_method, extraction_quality, rss_content_html, page_image = extract_article_text(
                 entry, canonical_url, clean_title
             )
+            clean_title, final_text = apply_outlet_cleaners(
+                clean_title, final_text, outlet_slug, canonical_url
+            )
+            if str(outlet_slug or "").casefold() == "livemint":
+                _, rss_content_html = apply_outlet_cleaners(
+                    clean_title, rss_content_html, outlet_slug, canonical_url
+                )
             # Only attach an image parsed from the article page itself. RSS
             # media can be feed artwork or a neighboring story's thumbnail.
             image_url = page_image
@@ -396,7 +392,10 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
                 article_length_cat = "medium"
             else:
                 article_length_cat = "long"
-            d_clean = clean_html(getattr(entry, "description", ""))
+            _, description_text = apply_outlet_cleaners(
+                clean_title, getattr(entry, "description", ""), outlet_slug, canonical_url
+            )
+            d_clean = clean_html(description_text)
             formatted_clean_text = format_clean_article(clean_title, final_text)
             article_row = {
                 "content_hash": content_hash,
@@ -404,9 +403,9 @@ def process_feed(source, existing_guids, content_hashes, existing_urls, new_arti
                 "outlet_slug": outlet_slug,
                 "title": clean_title,
                 "description": build_article_description(
-                    getattr(entry, "description", ""), final_text, clean_title
+                    description_text, final_text, clean_title
                 ),
-                "author": getattr(entry, "author", ""),
+                "author": None if str(outlet_slug or "").casefold() == "livemint" else getattr(entry, "author", ""),
                 "published_at": pub_date.isoformat() if pub_date else "",
                 "language": detected_lang,
                 "article_length": article_length_cat,
@@ -502,27 +501,23 @@ def run_fetch_cycle(args, existing_guids, content_hashes, existing_urls, sources
         except Exception as e:
             db.rollback()
             print(f"Error saving to DB: {e}")
+            raise
         finally:
             db.close()
             
-        # Keep the live CSV export in sync only after a successful DB commit.
+        # Rebuild the canonical CSV from the committed database rows. This
+        # keeps existing derived values and the new full schema intact instead
+        # of appending a partial RSS row into a potentially stale CSV header.
         if db_saved and saved_rows:
-            file_exists = os.path.exists(CSV_PATH) and os.path.getsize(CSV_PATH) > 0
-            csv_fields = CSV_FIELDNAMES
-            if file_exists:
-                with open(CSV_PATH, "r", encoding="utf-8-sig", newline="") as existing_csv:
-                    existing_header = next(csv.reader(existing_csv), [])
-                if existing_header:
-                    csv_fields = existing_header
-            with open(CSV_PATH, "a", newline="", encoding="utf-8-sig") as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=csv_fields, extrasaction="ignore")
-                if not file_exists:
-                    writer.writeheader()
-                for article_row in saved_rows:
-                    writer.writerow({**article_row, "cluster_id": "", "semantic_text_hash": "", "named_entities": json.dumps({"LOCATION": article_row.get("location", [])} if article_row.get("location") else {}, ensure_ascii=False), "embedding": ""})
-            print(f"Written {len(saved_rows)} new articles to PostgreSQL and {CSV_PATH}")
+            from backend.export.csv_export import export_to_csv
+            export_to_csv()
+            print(f"Written {len(saved_rows)} new articles to PostgreSQL; refreshed canonical CSV at {CSV_PATH}")
     else:
         print("No new articles found in this batch (all already in CSV or filtered out).")
+        # Also refresh the export schema on empty fetches, so legacy CSV headers
+        # are replaced even when this cycle only updates no article records.
+        from backend.export.csv_export import export_to_csv
+        export_to_csv()
 
     # Summary stats
     from collections import Counter
@@ -578,6 +573,10 @@ def main():
 
     print("Veritas Lens Standalone RSS Feed Fetcher")
     print()
+
+    # Apply additive summary-column migration and remove the retired hash
+    # column before ORM queries or new-article inserts use the current schema.
+    init_db()
 
     # Ensure data directory exists
     os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)

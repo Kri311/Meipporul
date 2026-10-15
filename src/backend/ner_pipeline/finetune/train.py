@@ -49,6 +49,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("NER_Trainer")
+EVENT_LOSS_WEIGHT = float(os.getenv("NER_EVENT_LOSS_WEIGHT", "2.5"))
 
 
 # ---------------------------------------------------------------------------
@@ -78,45 +79,92 @@ class NERDataset(Dataset):
         sample = self.samples[idx]
         tokens = sample["tokens"]
         bio_tags = sample["bio_tags"]
-        
-        # Tokenize with subword alignment
-        encoding = self.tokenizer(
-            tokens,
-            is_split_into_words=True,
-            truncation=True,
-            max_length=self.max_length,
-            padding=False,  # DataCollator handles padding
-            return_offsets_mapping=False,
-        )
-        
-        # Align BIO labels to subword tokens
-        word_ids = encoding.word_ids()
-        aligned_labels = []
-        previous_word_id = None
-        
-        for word_id in word_ids:
-            if word_id is None:
-                # Special tokens ([CLS], [SEP], [PAD])
-                aligned_labels.append(-100)
-            elif word_id != previous_word_id:
-                # First subword of a word → use the original BIO tag
-                label_str = bio_tags[word_id] if word_id < len(bio_tags) else "O"
-                aligned_labels.append(LABEL2ID.get(label_str, LABEL2ID["O"]))
-            else:
-                # Subsequent subword → use I- tag if the word has a B- tag
-                label_str = bio_tags[word_id] if word_id < len(bio_tags) else "O"
-                if label_str.startswith("B-"):
-                    # Convert B- to I- for continuation subwords
-                    i_label = "I-" + label_str[2:]
-                    aligned_labels.append(LABEL2ID.get(i_label, LABEL2ID["O"]))
+
+        def label_id(label):
+            return LABEL2ID.get(label, LABEL2ID["O"])
+
+        if getattr(self.tokenizer, "is_fast", False):
+            # Fast tokenizers expose word_ids(), which maps each WordPiece
+            # back to the whitespace token carrying its BIO label.
+            encoding = self.tokenizer(
+                tokens,
+                is_split_into_words=True,
+                truncation=True,
+                max_length=self.max_length,
+                padding=False,
+            )
+            aligned_labels = []
+            previous_word_id = None
+            for word_id in encoding.word_ids():
+                if word_id is None:
+                    aligned_labels.append(-100)
                 else:
-                    aligned_labels.append(LABEL2ID.get(label_str, LABEL2ID["O"]))
-            previous_word_id = word_id
-        
+                    label = bio_tags[word_id] if word_id < len(bio_tags) else "O"
+                    if word_id == previous_word_id and label.startswith("B-"):
+                        label = "I-" + label[2:]
+                    aligned_labels.append(label_id(label))
+                previous_word_id = word_id
+        else:
+            # Slow MuRIL/BERT tokenizers do not implement word_ids().
+            # Tokenize each source word separately, carry its BIO label across
+            # pieces, and let the tokenizer add CLS/SEP plus the truncation mask.
+            piece_ids = []
+            piece_labels = []
+            for word_index, word in enumerate(tokens):
+                word_ids = self.tokenizer.encode(str(word), add_special_tokens=False)
+                if not word_ids:
+                    word_ids = [self.tokenizer.unk_token_id]
+                label = bio_tags[word_index] if word_index < len(bio_tags) else "O"
+                for piece_index, token_id in enumerate(word_ids):
+                    piece_ids.append(token_id)
+                    piece_label = label
+                    if piece_index > 0 and label.startswith("B-"):
+                        piece_label = "I-" + label[2:]
+                    piece_labels.append(label_id(piece_label))
+
+            encoding = self.tokenizer.prepare_for_model(
+                piece_ids,
+                add_special_tokens=True,
+                truncation=True,
+                max_length=self.max_length,
+                padding=False,
+                return_special_tokens_mask=True,
+            )
+            aligned_labels = []
+            piece_index = 0
+            for is_special in encoding.pop("special_tokens_mask"):
+                if is_special:
+                    aligned_labels.append(-100)
+                else:
+                    aligned_labels.append(
+                        piece_labels[piece_index] if piece_index < len(piece_labels)
+                        else label_id("O")
+                    )
+                    piece_index += 1
+
         encoding["labels"] = aligned_labels
-        
-        # Convert to tensors
-        return {k: torch.tensor(v, dtype=torch.long) for k, v in encoding.items()}
+        return {key: torch.tensor(value, dtype=torch.long) for key, value in encoding.items()}
+
+
+class EventAwareTrainer(Trainer):
+    """Give rare EVENT BIO labels a modest, configurable loss weight."""
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        import torch.nn.functional as F
+
+        inputs = dict(inputs)
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        weights = torch.ones(NUM_LABELS, dtype=outputs.logits.dtype, device=outputs.logits.device)
+        weights[LABEL2ID["B-EVENT"]] = EVENT_LOSS_WEIGHT
+        weights[LABEL2ID["I-EVENT"]] = EVENT_LOSS_WEIGHT
+        loss = F.cross_entropy(
+            outputs.logits.reshape(-1, NUM_LABELS),
+            labels.reshape(-1),
+            weight=weights,
+            ignore_index=-100,
+        )
+        return (loss, outputs) if return_outputs else loss
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +293,7 @@ def save_metrics_csv(metrics: dict, phase: str = "eval"):
         "macro_f1": metrics.get("eval_macro_f1", metrics.get("macro_f1", 0)),
         "token_accuracy": metrics.get("eval_token_accuracy", metrics.get("token_accuracy", 0)),
         "eval_loss": metrics.get("eval_loss", 0),
+        "validation_basis": "auto-generated weak labels; not human-reviewed ground truth",
     }
     
     with open(summary_csv, "w", newline="", encoding="utf-8") as f:
@@ -255,6 +304,98 @@ def save_metrics_csv(metrics: dict, phase: str = "eval"):
     logger.info(f"Summary metrics saved to {summary_csv}")
     
     return entity_csv, summary_csv
+
+
+def save_consolidated_results_csv(eval_metrics, language_metrics, train_metrics,
+                                  elapsed_seconds, timestamp=None, history=None):
+    """Write definitions, aggregate/entity scores, and learning history to one CSV."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    timestamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_path = os.path.join(DATA_DIR, "ner_finetune_results.csv")
+    entity_types = ["PERSON", "ORGANIZATION", "LOCATION", "EVENT", "DATE"]
+    languages = ({"combined": eval_metrics} if eval_metrics else {}) | (language_metrics or {})
+    fields = [
+        "record_type", "run_timestamp", "model", "language", "entity_type", "precision",
+        "recall", "f1_score", "support", "macro_precision", "macro_recall", "macro_f1",
+        "micro_precision", "micro_recall", "micro_f1", "token_accuracy", "eval_loss",
+        "train_loss", "train_runtime_seconds", "training_epochs", "epoch", "step",
+        "learning_rate", "comment",
+    ]
+    rows = []
+    definitions = [
+        "Precision = exact predicted entity spans that match a reference span / all predicted spans.",
+        "Recall = exact reference entity spans recovered / all reference spans.",
+        "F1 = harmonic mean of exact-span precision and recall; entity_type rows are per class.",
+        "MACRO_AVG averages only entity classes with reference or predicted support; no-support classes are excluded.",
+        "MICRO scores aggregate true/false positives and negatives across entity types; token accuracy is secondary.",
+        "Validation labels are auto-generated weak supervision, not human-reviewed gold annotations.",
+        "EVENT support is the count of reference EVENT spans; support 0 means EVENT quality is not evaluated.",
+        "train_history rows record Trainer log points; blank fields mean that metric was not logged at that step.",
+    ]
+    for definition in definitions:
+        rows.append({
+            "record_type": "definition",
+            "run_timestamp": timestamp,
+            "model": BASE_MODEL_NAME,
+            "comment": definition,
+        })
+    for language, metrics in languages.items():
+        for entity_type in ["MACRO_AVG", *entity_types]:
+            prefix = "eval_"
+            if entity_type == "MACRO_AVG":
+                precision = metrics.get(f"{prefix}macro_precision", metrics.get("macro_precision", ""))
+                recall = metrics.get(f"{prefix}macro_recall", metrics.get("macro_recall", ""))
+                f1 = metrics.get(f"{prefix}macro_f1", metrics.get("macro_f1", ""))
+                support = sum(metrics.get(f"{prefix}{kind}_support", metrics.get(f"{kind}_support", 0))
+                              for kind in entity_types)
+            else:
+                precision = metrics.get(f"{prefix}{entity_type}_precision", metrics.get(f"{entity_type}_precision", ""))
+                recall = metrics.get(f"{prefix}{entity_type}_recall", metrics.get(f"{entity_type}_recall", ""))
+                f1 = metrics.get(f"{prefix}{entity_type}_f1", metrics.get(f"{entity_type}_f1", ""))
+                support = metrics.get(f"{prefix}{entity_type}_support", metrics.get(f"{entity_type}_support", 0))
+            rows.append({
+                "record_type": "evaluation",
+                "run_timestamp": timestamp,
+                "model": BASE_MODEL_NAME,
+                "language": language,
+                "entity_type": entity_type,
+                "precision": precision,
+                "recall": recall,
+                "f1_score": f1,
+                "support": support,
+                "macro_precision": metrics.get("eval_macro_precision", metrics.get("macro_precision", "")),
+                "macro_recall": metrics.get("eval_macro_recall", metrics.get("macro_recall", "")),
+                "macro_f1": metrics.get("eval_macro_f1", metrics.get("macro_f1", "")),
+                "micro_precision": metrics.get("eval_micro_precision", metrics.get("micro_precision", "")),
+                "micro_recall": metrics.get("eval_micro_recall", metrics.get("micro_recall", "")),
+                "micro_f1": metrics.get("eval_micro_f1", metrics.get("micro_f1", "")),
+                "token_accuracy": metrics.get("eval_token_accuracy", metrics.get("token_accuracy", "")),
+                "eval_loss": metrics.get("eval_loss", ""),
+                "train_loss": train_metrics.get("train_loss", ""),
+                "train_runtime_seconds": train_metrics.get("train_runtime", elapsed_seconds),
+                "training_epochs": train_metrics.get("epoch", ""),
+                "comment": "Weak-label validation; see definition records above.",
+            })
+    for entry in history or []:
+        rows.append({
+            "record_type": "train_history",
+            "run_timestamp": timestamp,
+            "model": BASE_MODEL_NAME,
+            "epoch": entry.get("epoch", ""),
+            "step": entry.get("step", ""),
+            "learning_rate": entry.get("learning_rate", ""),
+            "train_loss": entry.get("loss", entry.get("train_loss", "")),
+            "eval_loss": entry.get("eval_loss", ""),
+            "macro_f1": entry.get("eval_macro_f1", ""),
+            "token_accuracy": entry.get("eval_token_accuracy", ""),
+            "comment": "Trainer log record.",
+        })
+    with open(results_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+    logger.info("Consolidated NER results and definitions saved to %s", results_path)
+    return results_path
 
 
 def save_training_history_csv(trainer):
@@ -330,7 +471,7 @@ def load_base_model(model_name):
         force_download = attempt == 1
         try:
             tokenizer = AutoTokenizer.from_pretrained(
-                model_name, force_download=force_download
+                model_name, force_download=force_download, use_fast=True
             )
             model = AutoModelForTokenClassification.from_pretrained(
                 model_name,
@@ -355,6 +496,20 @@ def load_base_model(model_name):
 # Main Training Function
 # ---------------------------------------------------------------------------
 
+def count_event_spans(jsonl_path):
+    """Count EVENT spans by language in a prepared JSONL split."""
+    counts = {"en": 0, "ta": 0}
+    with open(jsonl_path, encoding="utf-8") as stream:
+        for line in stream:
+            if not line.strip():
+                continue
+            sample = json.loads(line)
+            language = str(sample.get("language", "")).lower().split("-")[0]
+            if language in counts:
+                counts[language] += sum(tag == "B-EVENT" for tag in sample.get("bio_tags", []))
+    return counts
+
+
 def train():
     """Run the full fine-tuning pipeline."""
     
@@ -369,6 +524,22 @@ def train():
         logger.error("Training data not found. Run auto_annotate.py first!")
         logger.error(f"Expected: {train_path} and {val_path}")
         sys.exit(1)
+
+    event_train_support = count_event_spans(train_path)
+    event_val_support = count_event_spans(val_path)
+    missing_support = [
+        f"{language} train={event_train_support[language]}, val={event_val_support[language]}"
+        for language in ("en", "ta")
+        if event_train_support[language] == 0 or event_val_support[language] == 0
+    ]
+    if missing_support:
+        raise ValueError(
+            "EVENT training/evaluation needs EVENT spans for English and Tamil in both splits; "
+            f"found {', '.join(missing_support)}. Regenerate annotations with "
+            "./scripts/prepare_ner_data.sh and add/review more event examples before training."
+        )
+    logger.info("EVENT BIO spans: train=%s, validation=%s", event_train_support, event_val_support)
+    logger.info("EVENT token loss weight: %s", EVENT_LOSS_WEIGHT)
     
     # --- 1. Load tokenizer and model ---
     # Support local pre-downloaded model
@@ -391,7 +562,6 @@ def train():
     data_collator = DataCollatorForTokenClassification(
         tokenizer=tokenizer,
         padding=True,
-        max_length=MAX_SEQ_LENGTH,
     )
     
     # --- 3. Training arguments ---
@@ -425,7 +595,7 @@ def train():
     )
     
     # --- 4. Trainer ---
-    trainer = Trainer(
+    trainer = EventAwareTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -437,6 +607,10 @@ def train():
     
     # --- 5. Train ---
     logger.info("Starting fine-tuning...")
+    logger.warning(
+        "NER validation data is generated by the weak annotator. Its F1 measures "
+        "agreement with those labels, not independent real-world entity accuracy."
+    )
     start_time = time.time()
     
     train_result = trainer.train()
@@ -459,13 +633,18 @@ def train():
     logger.info(f"Best model saved to {best_model_dir}")
     
     # --- 8. Save metrics as CSV ---
-    entity_csv, summary_csv = save_metrics_csv(eval_metrics, phase="final_eval")
-    history_csv = save_training_history_csv(trainer)
     history_plot = save_training_history_plot(trainer)
 
     # Language-separated validation for the saved best checkpoint.
     from backend.ner_pipeline.finetune.evaluate_per_language import evaluate_languages
-    language_metrics = evaluate_languages(model_dir=best_model_dir)
+    language_metrics = evaluate_languages(model_dir=best_model_dir, save_csv=False) or {}
+    result_csv = save_consolidated_results_csv(
+        eval_metrics,
+        language_metrics or {},
+        train_result.metrics,
+        elapsed,
+        history=trainer.state.log_history,
+    )
     
     logger.info(f"\n{'='*60}")
     logger.info(f"FINE-TUNING COMPLETE")
@@ -474,9 +653,7 @@ def train():
     logger.info(f"Best model:    {best_model_dir}")
     logger.info(f"Macro F1:      {eval_metrics.get('eval_macro_f1', 'N/A')}")
     logger.info(f"Token Accuracy:{eval_metrics.get('eval_token_accuracy', 'N/A')}")
-    logger.info(f"Metrics CSV:   {entity_csv}")
-    logger.info(f"Summary CSV:   {summary_csv}")
-    logger.info(f"History CSV:   {history_csv}")
+    logger.info(f"Results CSV:   {result_csv}")
     logger.info(f"History plot:  {history_plot}")
     for language, metrics in language_metrics.items():
         logger.info(

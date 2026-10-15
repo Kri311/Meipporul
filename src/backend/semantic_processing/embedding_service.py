@@ -1,7 +1,6 @@
 import os
 import sys
 import time
-import hashlib
 import re
 from datetime import datetime
 import numpy as np
@@ -28,19 +27,30 @@ MAX_CHUNK_CHARS = 1800
 HEADLINE_VECTOR_WEIGHT = float(os.getenv("HEADLINE_VECTOR_WEIGHT", "0.65"))
 
 class EmbeddingService:
-    """Handles article embedding generation with text hashing and metadata tracking."""
+    """Generate and persist multilingual article embeddings."""
     
     def __init__(self):
         self._model = None
+        self._device = None
     
     def _get_model(self):
         """Lazy singleton model loading."""
         if self._model is None:
             from sentence_transformers import SentenceTransformer
             import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            requested_device = os.getenv("EMBEDDING_DEVICE", "auto").casefold()
+            device = self._device or ("cuda" if requested_device == "cuda" else "cpu")
+            if self._device is None and requested_device == "auto":
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            if device == "cuda" and not torch.cuda.is_available():
+                logger.warning("CUDA was requested for embeddings but is unavailable; using CPU")
+                device = "cpu"
             logger.info(f"Loading {EMBEDDING_MODEL_NAME} on {device}...")
-            self._model = SentenceTransformer(EMBEDDING_MODEL_NAME, device=device)
+            load_options = {}
+            if os.getenv("HF_HUB_OFFLINE", "0").casefold() in {"1", "true", "yes"}:
+                load_options["local_files_only"] = True
+            self._model = SentenceTransformer(EMBEDDING_MODEL_NAME, device=device, **load_options)
+            self._device = device
         return self._model
     
     @staticmethod
@@ -78,18 +88,14 @@ class EmbeddingService:
             chunks.append(prefix + current)
         return chunks or [text]
     
-    @staticmethod
-    def compute_text_hash(text: str) -> str:
-        """SHA-256 hash of the semantic text for change detection."""
-        return hashlib.sha256(text.encode('utf-8')).hexdigest()
-    
     def needs_reembedding(self, article) -> bool:
-        """Check if the article content has changed since last embedding."""
-        if article.embedding is None:
-            return True
-        text = self.generate_semantic_text(article)
-        current_hash = self.compute_text_hash(text)
-        return current_hash != article.semantic_text_hash
+        """Check whether this row lacks a vector from the configured E5 model.
+
+        Text normalization clears the vector when its input changes. This
+        avoids a separate semantic_text_hash column while retaining correct
+        incremental re-embedding behavior.
+        """
+        return article.embedding is None or article.embedding_model != EMBEDDING_MODEL_NAME
     
     def embed_batch(self, texts: list) -> np.ndarray:
         """Combine headline-focused and body-context vectors per article.
@@ -116,12 +122,29 @@ class EmbeddingService:
             flat_passages.extend(body_chunks)
             components.append((headline_index, body_start, len(body_chunks)))
 
-        encoded = model.encode(
-            flat_passages,
-            batch_size=EMBEDDING_BATCH_SIZE, 
-            normalize_embeddings=True,
-            show_progress_bar=False
-        )
+        try:
+            encoded = model.encode(
+                flat_passages,
+                batch_size=EMBEDDING_BATCH_SIZE,
+                normalize_embeddings=True,
+                show_progress_bar=False
+            )
+        except RuntimeError as exc:
+            import torch
+            if self._device != "cuda" or "out of memory" not in str(exc).casefold():
+                raise
+            logger.warning("CUDA ran out of memory embedding a batch; retrying on CPU")
+            self._model = None
+            self._device = "cpu"
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+            encoded = self._get_model().encode(
+                flat_passages,
+                batch_size=EMBEDDING_BATCH_SIZE,
+                normalize_embeddings=True,
+                show_progress_bar=False
+            )
         article_embeddings = []
         for headline_index, body_start, body_count in components:
             headline_vector = encoded[headline_index]
@@ -137,8 +160,8 @@ class EmbeddingService:
             article_embeddings.append(vector / norm if norm else vector)
         return np.asarray(article_embeddings)
     
-    def process_pending_articles(self, limit: int = None) -> int:
-        """Process all pending articles that need embedding."""
+    def process_pending_articles(self, limit: int = None, reembed_all: bool = False) -> int:
+        """Process missing/stale vectors, or refresh every clean article on request."""
         db = SessionLocal()
         total_embedded = 0
         last_seen_id = 0
@@ -157,17 +180,16 @@ class EmbeddingService:
                 if not page:
                     break
                 last_seen_id = page[-1].id
-                articles = [a for a in page if self.needs_reembedding(a)][:batch_limit]
+                candidates = page if reembed_all else [a for a in page if self.needs_reembedding(a)]
+                articles = candidates[:batch_limit]
 
                 if not articles:
                     continue
                 
                 texts = []
-                hashes = []
                 for article in articles:
                     text = self.generate_semantic_text(article)
                     texts.append(text)
-                    hashes.append(self.compute_text_hash(text))
                 
                 start = time.time()
                 embeddings = self.embed_batch(texts)
@@ -175,7 +197,6 @@ class EmbeddingService:
                 
                 for i, article in enumerate(articles):
                     article.embedding = embeddings[i].tolist()
-                    article.semantic_text_hash = hashes[i]
                     article.embedding_model = EMBEDDING_MODEL_NAME
                     article.embedding_created_at = datetime.utcnow()
                     article.processing_status = "embedded"
@@ -196,11 +217,16 @@ class EmbeddingService:
         
         return total_embedded
 
-def run_embedding_pipeline():
+def run_embedding_pipeline(reembed_all=False):
     """Entry point for standalone execution."""
     service = EmbeddingService()
-    total = service.process_pending_articles()
+    total = service.process_pending_articles(reembed_all=reembed_all)
     logger.info(f"Embedding pipeline complete. Total embedded: {total}")
 
 if __name__ == "__main__":
-    run_embedding_pipeline()
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate E5 embeddings for articles")
+    parser.add_argument("--reembed-all", action="store_true",
+                        help="recompute vectors for every article with clean text")
+    args = parser.parse_args()
+    run_embedding_pipeline(reembed_all=args.reembed_all)

@@ -29,7 +29,7 @@ FIELDNAMES = [
     "published_at", "language", "article_length", "data_fetch_via",
     "canonical_url", "extraction_method", "extraction_quality",
     "processing_status", "raw_text", "clean_text", "topic", "cluster_id",
-    "semantic_text_hash", "named_entities", "embedding",
+    "named_entities", "embedding", "summary",
 ]
 
 
@@ -38,10 +38,11 @@ def reclean_export(path):
     count = 0
     with open(path, "r", encoding="utf-8-sig", newline="") as input_file:
         reader = csv.DictReader(input_file)
-        if reader.fieldnames != FIELDNAMES:
-            raise ValueError("Input CSV does not match the expected 21-column schema.")
+        required = {"guid", "title", "published_at", "clean_text"}
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            raise ValueError("Input CSV is missing required article fields.")
         with open(temp_path, "w", encoding="utf-8-sig", newline="") as output_file:
-            writer = csv.DictWriter(output_file, fieldnames=FIELDNAMES)
+            writer = csv.DictWriter(output_file, fieldnames=FIELDNAMES, extrasaction="ignore")
             writer.writeheader()
             for row in reader:
                 try:
@@ -87,9 +88,9 @@ def reclean_export(path):
                     "clean_text": format_clean_article(title, body),
                     "topic": classify_topic(title, body, row.get("outlet_slug", ""), location) if changed else row.get("topic", ""),
                     "cluster_id": "" if changed else row.get("cluster_id", ""),
-                    "semantic_text_hash": "" if changed else row.get("semantic_text_hash", ""),
                     "named_entities": json.dumps(entities, ensure_ascii=False),
                     "embedding": "" if changed else row.get("embedding", ""),
+                    "summary": "[]" if changed else row.get("summary", "[]"),
                 })
                 writer.writerow(row)
                 count += 1

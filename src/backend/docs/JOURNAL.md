@@ -2,8 +2,9 @@
 
 > **Current implementation note (2026-10-08):** This journal is a historical
 > research and decision log, not an authoritative description of runtime
-> behavior. For the current 21-column export contract and run instructions,
-> see the repository README and ARTICLE_REPROCESSING.md. The active embedding
+> behavior. For the current enriched CSV contract and run instructions,
+> see the repository README.md and REPORT.md; ARTICLE_REPROCESSING.md covers
+> the separate historical URL refresh tool. The active embedding
 > default and language-view policy may differ from older experiments below.
 
 > **Project type:** Production-oriented Tamil + English news intelligence platform

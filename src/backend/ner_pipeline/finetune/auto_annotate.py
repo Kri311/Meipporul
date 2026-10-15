@@ -14,6 +14,7 @@ import sys
 import json
 import re
 import unicodedata
+import hashlib
 from collections import defaultdict
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -158,6 +159,15 @@ DATE_PATTERNS = [
     # YYYY-MM-DD
     r'\b\d{4}-\d{2}-\d{2}\b',
 ]
+TAMIL_MONTHS = (
+    "ஜனவரி|பிப்ரவரி|மார்ச்|ஏப்ரல்|மே|ஜூன்|ஜூலை|ஆகஸ்ட்|"
+    "செப்டம்பர்|அக்டோபர்|நவம்பர்|டிசம்பர்"
+)
+TAMIL_DIGITS = r"\d\u0be6-\u0bef"
+DATE_PATTERNS.extend([
+    rf"[{TAMIL_DIGITS}]{{1,2}}\s*(?:{TAMIL_MONTHS})(?:\s*[{TAMIL_DIGITS}]{{2,4}})?",
+    rf"(?:{TAMIL_MONTHS})\s*[{TAMIL_DIGITS}]{{1,2}}(?:,?\s*[{TAMIL_DIGITS}]{{2,4}})?",
+])
 
 _date_re = re.compile('|'.join(DATE_PATTERNS), re.IGNORECASE)
 
@@ -171,47 +181,156 @@ def find_date_spans(text: str) -> list:
 # Zero-Shot Model Annotation (Babelscape)
 # ---------------------------------------------------------------------------
 
-def get_zero_shot_entities(text: str) -> list:
+_teacher_pipeline = None
+
+_EVENT_MARKERS = {
+    "en": re.compile(
+        r"(?i)\b(?:operation|war|battle|attack|bombing|protest|strike|summit|"
+        r"conference|tournament|world cup|olympics|election|festival|massacre|"
+        r"crash|disaster|cyclone|flood|mission|campaign|riots?)\b"
+    ),
+    "ta": re.compile(
+        r"(?:நடவடிக்கை|போர்|போராட்டம்|தாக்குதல்|குண்டுவெடிப்பு|கலவரம்|"
+        r"மாநாடு|உச்சிமாநாடு|பேரணி|தேர்தல்|விழா|விளையாட்டுப் போட்டி|"
+        r"விபத்து|பேரழிவு|புயல்|வெள்ளம்|மீட்பு நடவடிக்கை)"
+    ),
+}
+
+# Weak EVENT spans are generated independently of the teacher's MISC class.
+# The previous annotator only relabeled a teacher MISC span when a cue was
+# nearby; in practice the teacher often returned no such spans, leaving the
+# EVENT class empty. These patterns deliberately focus on named or compound
+# event mentions rather than tagging every generic word such as "attack".
+_EN_EVENT_SPAN_PATTERNS = [
+    # Named operations/missions/campaigns: Operation Sindoor, Mission X, etc.
+    re.compile(
+        r"\b(?:Operation|Mission|Exercise|Campaign|Project)\s+"
+        r"[A-Z0-9][\w’'-]*(?:\s+[A-Z0-9][\w’'-]*){0,2}\b"
+    ),
+    # Named event heads with at least one proper-cased word before the head.
+    re.compile(
+        r"\b(?:[A-Z][\w’'-]*\s+){1,3}"
+        r"(?:War|Battle|Summit|Conference|Tournament|World\s+Cup|Grand\s+Prix|"
+        r"Olympics|Election|Festival|Massacre|Bombing|Protest|Strike|Riot)\b"
+    ),
+]
+_TA_EVENT_SPAN_PATTERN = re.compile(
+    # Tamil does not have case distinctions. Capture short compounds ending
+    # in an event head; avoid one-token generic mentions such as "போராட்டம்".
+    r"(?<![\u0B80-\u0BFF])"
+    r"[\u0B80-\u0BFF]+(?:\s+[\u0B80-\u0BFF]+){1,3}\s*"
+    r"(?:நடவடிக்கை|போர்|போராட்டம்|தாக்குதல்|குண்டுவெடிப்பு|கலவரம்|"
+    r"மாநாடு|உச்சிமாநாடு|பேரணி|தேர்தல்|விழா|விளையாட்டுப் போட்டி|"
+    r"விபத்து|பேரழிவு|புயல்|வெள்ளம்|மீட்பு நடவடிக்கை)"
+)
+
+
+def find_weak_event_spans(text: str, language: str) -> list:
+    """Find conservative weak EVENT character spans in English or Tamil text.
+
+    These are training labels, not gold annotations. English patterns require
+    a named event construction; Tamil patterns require a multiword compound
+    ending in an event noun. The teacher MISC mapping remains an additional
+    source of spans.
     """
-    Run the Babelscape zero-shot NER model on the text.
+    if language == "ta":
+        return [(match.start(), match.end()) for match in _TA_EVENT_SPAN_PATTERN.finditer(text)]
+    spans = []
+    for pattern in _EN_EVENT_SPAN_PATTERNS:
+        spans.extend((match.start(), match.end()) for match in pattern.finditer(text))
+    # Keep non-overlapping longest spans; duplicate matches from patterns are
+    # otherwise capable of producing invalid BIO sequences.
+    selected = []
+    for start, end in sorted(set(spans), key=lambda span: (span[0], -(span[1] - span[0]))):
+        if selected and start < selected[-1][1]:
+            if end > selected[-1][1]:
+                selected[-1] = (selected[-1][0], end)
+            continue
+        selected.append((start, end))
+    return selected
+
+
+def is_weak_event_mention(sentence: str, start: int, end: int, word: str, language: str) -> bool:
+    """Conservatively map teacher MISC spans to EVENT only beside event cues.
+
+    WikiNeural's MISC class mixes many kinds of miscellaneous spans, so it is
+    never mapped directly. A nearby explicit event noun is required. These
+    remain weak labels and must not be reported as human-gold evaluation.
+    """
+    lang = "ta" if language == "ta" else "en"
+    if _EVENT_MARKERS[lang].search(word or ""):
+        return True
+    # Require the cue to be adjacent to the candidate span to avoid converting
+    # unrelated nationalities/organizations into events due to distant context.
+    neighborhood = f"{sentence[max(0, start - 36):start]} {sentence[end:end + 36]}"
+    return bool(_EVENT_MARKERS[lang].search(neighborhood))
+
+
+def get_zero_shot_entities(text: str, language: str | None = None) -> list:
+    """
+    Run a separate multilingual teacher model on the text.
+
+    Do not use the local fine-tuned checkpoint here: generating its training
+    labels from its own predictions creates a self-training feedback loop and
+    makes validation appear better without adding independent information.
     Returns list of dicts with keys: word, entity_group, start, end, score.
     """
-    from backend.ner_pipeline.zero_shot.nlp_pipeline import get_ner_pipeline, is_valid_entity
-    
-    ner = get_ner_pipeline()
-    
-    # Segment into sentences to avoid max_length issues
-    sentences = re.split(r'(?<=[.!?|।])\s+', text)
-    sentences = [s for s in sentences if len(s) > 5]
+    global _teacher_pipeline
+    from backend.ner_pipeline.zero_shot.nlp_pipeline import is_valid_entity
+
+    if _teacher_pipeline is None:
+        import torch
+        from transformers import pipeline
+        teacher_name = os.getenv(
+            "NER_TEACHER_MODEL_NAME", "Babelscape/wikineural-multilingual-ner"
+        )
+        _teacher_pipeline = pipeline(
+            "ner", model=teacher_name, aggregation_strategy="simple",
+            device=0 if torch.cuda.is_available() else -1,
+        )
+        print(f"[AutoAnnotator] Weak-label teacher: {teacher_name}")
+    ner = _teacher_pipeline
     
     entities = []
-    char_offset = 0
-    
-    for sent in sentences[:10]:  # Process up to 10 sentences
+    minimum_score = float(os.getenv("NER_TEACHER_MIN_CONFIDENCE", "0.70"))
+    for match in list(re.finditer(r'[^.!?।ஃ\n]+(?:[.!?।ஃ]+|$)', text))[:10]:
+        sent = match.group().strip()
+        if len(sent) <= 5:
+            continue
+        sentence_start = match.start() + len(match.group()) - len(match.group().lstrip())
         results = ner(sent)
         for ent in results:
             group = ent.get('entity_group', ent.get('entity', ''))
             word = ent.get('word', '').strip()
-            score = ent.get('score', 0.0)
+            score = float(ent.get('score', 0.0) or 0.0)
+
+            if score < minimum_score:
+                continue
             
             if not is_valid_entity(word):
                 continue
                 
             # Map tags
             mapped = None
-            if group == 'PER': mapped = 'PERSON'
-            elif group == 'ORG': mapped = 'ORGANIZATION'
-            elif group == 'LOC': mapped = 'LOCATION'
-            elif group == 'MISC': mapped = 'EVENT'
+            if group in ('PER', 'PERSON'): mapped = 'PERSON'
+            elif group in ('ORG', 'ORGANIZATION'): mapped = 'ORGANIZATION'
+            elif group in ('LOC', 'LOCATION', 'GPE'): mapped = 'LOCATION'
+            elif group in ("MISC", "MISCELLANEOUS") and is_weak_event_mention(
+                sent, int(ent.get("start") or 0), int(ent.get("end") or 0), word,
+                (language or ("ta" if re.search(r"[\u0B80-\u0BFF]", sent) else "en")),
+            ):
+                # Only event-cued MISC spans receive weak EVENT labels. Generic
+                # MISC spans remain outside the event class.
+                mapped = "EVENT"
             
             if mapped:
                 entities.append({
                     'word': word,
                     'entity_group': mapped,
                     'score': score,
+                    'start': sentence_start + int(ent.get('start') or 0),
+                    'end': sentence_start + int(ent.get('end') or 0),
                 })
-        
-        char_offset += len(sent) + 1  # +1 for the space
     
     return entities
 
@@ -220,7 +339,7 @@ def get_zero_shot_entities(text: str) -> list:
 # BIO Tag Assignment (Ensemble: zero-shot + gazetteer + rules)
 # ---------------------------------------------------------------------------
 
-def annotate_tokens_bio(text: str, use_model: bool = True) -> dict:
+def annotate_tokens_bio(text: str, use_model: bool = True, language: str | None = None) -> dict:
     """
     Given a raw text string, produce BIO-tagged token annotations.
     
@@ -253,7 +372,7 @@ def annotate_tokens_bio(text: str, use_model: bool = True) -> dict:
                 inside = True
             elif inside:
                 inside = False
-    
+
     # --- Layer 2: Gazetteer matching ---
     for i, tok in enumerate(tokens):
         if bio_tags[i] != "O":
@@ -262,37 +381,56 @@ def annotate_tokens_bio(text: str, use_model: bool = True) -> dict:
         if gaz_match:
             bio_tags[i] = f"B-{gaz_match}"
     
-    # Multi-word gazetteer matching (bigrams and trigrams)
-    for n in [3, 2]:
+    # Longest-first phrase matching keeps complete gazetteer mentions intact.
+    max_phrase = max((len(key.split()) for key in GAZ_INDEX), default=1)
+    for n in range(max_phrase, 1, -1):
         for i in range(len(tokens) - n + 1):
             phrase = " ".join(tokens[i:i+n])
             phrase_lower = phrase.lower()
-            if phrase_lower in GAZ_INDEX:
+            if phrase_lower in GAZ_INDEX and all(tag == "O" for tag in bio_tags[i:i+n]):
                 label = GAZ_INDEX[phrase_lower][0]
                 bio_tags[i] = f"B-{label}"
                 for j in range(i+1, i+n):
                     bio_tags[j] = f"I-{label}"
+
+    # --- Layer 2b: Explicit named/compound event mention rules ---
+    event_language = (language or ("ta" if is_tamil(norm_text) else "en")).lower().split("-")[0]
+    for event_start, event_end in find_weak_event_spans(norm_text, event_language):
+        matching = [i for i, (_, ts, te) in enumerate(token_tuples)
+                    if ts < event_end and te > event_start]
+        # Do not overwrite DATE or gazetteer spans. A named location/person
+        # inside an event expression can therefore retain its own entity type.
+        if matching and all(bio_tags[i] == "O" for i in matching):
+            for offset, token_index in enumerate(matching):
+                bio_tags[token_index] = f"{'B' if offset == 0 else 'I'}-EVENT"
     
     # --- Layer 3: Zero-shot model predictions ---
     if use_model:
         try:
-            model_entities = get_zero_shot_entities(norm_text)
+            model_entities = get_zero_shot_entities(norm_text, language=event_language)
             for ent in model_entities:
-                word = ent['word']
                 label = ent['entity_group']
-                # Find matching token(s) in our token list
-                word_tokens = word.split()
-                for i in range(len(tokens) - len(word_tokens) + 1):
-                    if " ".join(tokens[i:i+len(word_tokens)]).lower() == word.lower():
-                        # Only override if currently O
-                        if bio_tags[i] == "O":
-                            bio_tags[i] = f"B-{label}"
-                            for j in range(i+1, i+len(word_tokens)):
-                                if bio_tags[j] == "O":
-                                    bio_tags[j] = f"I-{label}"
-                        break
-        except Exception:
-            pass  # Model not available; continue with rules only
+                start, end = ent.get("start"), ent.get("end")
+                matching = [i for i, (_, ts, te) in enumerate(token_tuples)
+                            if start is not None and end is not None and ts < end and te > start]
+                # Character offsets are the reliable alignment. Keep exact
+                # token-string matching only as a fallback for model versions
+                # that do not return offsets.
+                if not matching:
+                    word = ent["word"].strip()
+                    word_tokens = word.split()
+                    for i in range(len(tokens) - len(word_tokens) + 1):
+                        if " ".join(tokens[i:i+len(word_tokens)]).casefold() == word.casefold():
+                            matching = list(range(i, i + len(word_tokens)))
+                            break
+                if matching and all(bio_tags[i] == "O" for i in matching):
+                    for offset, token_index in enumerate(matching):
+                        bio_tags[token_index] = f"{'B' if offset == 0 else 'I'}-{label}"
+        except Exception as exc:
+            raise RuntimeError(
+                "Teacher NER failed while generating weak labels. Use --no-model "
+                "for gazetteer/date-only annotations or fix the teacher model setup."
+            ) from exc
     
     # --- Layer 4: Context suffix rules ---
     for i, tok in enumerate(tokens):
@@ -343,24 +481,56 @@ def generate_bio_dataset(use_model: bool = True):
             sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
             
             for sent in sentences[:8]:  # Use first 8 sentences per article
-                result = annotate_tokens_bio(sent, use_model=use_model)
+                result = annotate_tokens_bio(sent, use_model=use_model, language=article["language"])
                 if result["tokens"]:
+                    article_key = hashlib.sha256(
+                        (article.get("headline", "") + "\n" + article.get("content", "")[:1000])
+                        .casefold().encode("utf-8")
+                    ).hexdigest()
                     all_samples.append({
                         "tokens": result["tokens"],
                         "bio_tags": result["bio_tags"],
                         "language": article["language"],
+                        "article_id": article_key,
+                        "label_source": (
+                            "teacher_gazetteer_event_weak"
+                            if any(tag.endswith("-EVENT") for tag in result["bio_tags"])
+                            else "teacher_gazetteer_weak"
+                        ),
                     })
             
             if (idx + 1) % 100 == 0:
                 print(f"  Processed {idx + 1} articles, {len(all_samples)} sentences so far...")
     
-    # Shuffle and split
+    # Split by article, never by sentence. Sentence-level splitting leaks the
+    # same article's entities into both training and validation.
     random.seed(42)
-    random.shuffle(all_samples)
-    
-    split_idx = int(len(all_samples) * TRAIN_SPLIT)
-    train_samples = all_samples[:split_idx]
-    val_samples = all_samples[split_idx:]
+    article_ids = sorted({sample["article_id"] for sample in all_samples})
+    if len(article_ids) < 2:
+        raise ValueError("Need at least two distinct articles to create an article-level train/validation split.")
+    # Stratify by language and whether an article carries an EVENT label, but
+    # keep every article wholly in one split to prevent sentence leakage.
+    article_meta = {}
+    for sample in all_samples:
+        meta = article_meta.setdefault(sample["article_id"], {"language": sample["language"], "has_event": False})
+        meta["has_event"] = meta["has_event"] or any(tag == "B-EVENT" for tag in sample["bio_tags"])
+    strata = defaultdict(list)
+    for article_id, meta in article_meta.items():
+        strata[(meta["language"], meta["has_event"])].append(article_id)
+    train_article_ids = set()
+    for stratum_ids in strata.values():
+        random.shuffle(stratum_ids)
+        if len(stratum_ids) < 2:
+            # Preserve the only sample in train; the EVENT support guard below
+            # will explain if a second independent event article is required.
+            train_article_ids.update(stratum_ids)
+            continue
+        split_idx = min(len(stratum_ids) - 1, max(1, int(len(stratum_ids) * TRAIN_SPLIT)))
+        train_article_ids.update(stratum_ids[:split_idx])
+    if len(train_article_ids) == len(article_ids):
+        train_article_ids.remove(article_ids[-1])
+    train_samples = [sample for sample in all_samples if sample["article_id"] in train_article_ids]
+    val_samples = [sample for sample in all_samples if sample["article_id"] not in train_article_ids]
     
     # Write JSONL
     train_path = os.path.join(output_dir, "train.jsonl")
@@ -376,16 +546,22 @@ def generate_bio_dataset(use_model: bool = True):
         1 for s in all_samples for t in s["bio_tags"] if t.startswith("B-")
     )
     entity_counts = defaultdict(int)
+    event_counts_by_language = defaultdict(int)
     for s in all_samples:
         for tag in s["bio_tags"]:
             if tag.startswith("B-"):
                 etype = tag[2:]
                 entity_counts[etype] += 1
+                if etype == "EVENT":
+                    event_counts_by_language[s["language"]] += 1
     
     print(f"\n[AutoAnnotator] Dataset Generation Complete")
     print(f"  Total sentences: {len(all_samples)}")
     print(f"  Train: {len(train_samples)}, Val: {len(val_samples)}")
+    print(f"  Article groups: {len(train_article_ids)} train, {len(article_ids) - len(train_article_ids)} val")
+    print("  Validation targets are teacher/gazetteer weak labels, not human-reviewed ground truth.")
     print(f"  Total entity mentions: {total_entities}")
+    print(f"  EVENT mentions by language: {dict(event_counts_by_language)}")
     for etype, count in sorted(entity_counts.items()):
         print(f"    {etype}: {count}")
     print(f"  Saved to: {train_path}, {val_path}")
@@ -395,6 +571,7 @@ def generate_bio_dataset(use_model: bool = True):
         "train_count": len(train_samples),
         "val_count": len(val_samples),
         "entity_counts": dict(entity_counts),
+        "event_counts_by_language": dict(event_counts_by_language),
     }
 
 

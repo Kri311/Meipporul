@@ -132,18 +132,23 @@ def save_language_plots(lang_metrics_dict):
     return outputs
 
 
-def evaluate_languages(model_dir=None):
+def evaluate_languages(model_dir=None, save_csv=True):
     best_model_dir = model_dir or os.path.join(MODEL_DIR, "best")
     if not os.path.exists(best_model_dir):
         logger.error(f"Best model not found at {best_model_dir}. Run training first.")
         return
         
-    tokenizer = AutoTokenizer.from_pretrained(best_model_dir)
+    # NERDataset aligns labels with word_ids(); use a fast tokenizer when the
+    # checkpoint includes its tokenizer.json. NERDataset also has a slow-tokenizer fallback.
+    tokenizer = AutoTokenizer.from_pretrained(best_model_dir, use_fast=True)
     model = AutoModelForTokenClassification.from_pretrained(best_model_dir)
     
     val_path = os.path.join(DATASET_DIR, "val.jsonl")
     
-    data_collator = DataCollatorForTokenClassification(tokenizer=tokenizer, padding=True, max_length=MAX_SEQ_LENGTH)
+    # Dataset sequences are already truncated to MAX_SEQ_LENGTH. Dynamic
+    # padding pads only to each batch's longest sequence, so max_length here
+    # is redundant and triggers a Transformers warning.
+    data_collator = DataCollatorForTokenClassification(tokenizer=tokenizer, padding=True)
     
     args = TrainingArguments(output_dir="/tmp", per_device_eval_batch_size=16, report_to="none")
     trainer = Trainer(
@@ -174,13 +179,22 @@ def evaluate_languages(model_dir=None):
         logger.info(f"Macro F1: {metrics.get('eval_macro_f1', 0)}")
         logger.info(f"Accuracy: {metrics.get('eval_token_accuracy', 0)}")
         
-    report_path = save_lang_metrics_csv(lang_metrics_dict)
+    report_path = None
+    if save_csv:
+        from backend.ner_pipeline.finetune.train import save_consolidated_results_csv
+        report_path = save_consolidated_results_csv(
+            eval_metrics=None,
+            language_metrics=lang_metrics_dict,
+            train_metrics={},
+            elapsed_seconds=0,
+        )
     plot_paths = save_language_plots(lang_metrics_dict)
-    logger.info("Per-language metrics CSV: %s", report_path)
+    if report_path:
+        logger.info("Per-language metrics CSV: %s", report_path)
     for path in plot_paths:
         logger.info("Per-language plot: %s", path)
     logger.warning("These are weak-supervision validation scores, not human gold-label scores.")
     return lang_metrics_dict
     
 if __name__ == "__main__":
-    evaluate_languages()
+    evaluate_languages(save_csv=True)

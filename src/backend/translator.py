@@ -1,5 +1,8 @@
 import torch
-from transformers import pipeline
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, pipeline
+from backend.semantic_processing.topic_classifier import topic_labels
+
+TRANSLATION_MODEL_NAME = "facebook/nllb-200-distilled-600M"
 
 class TranslationService:
     def __init__(self):
@@ -7,22 +10,22 @@ class TranslationService:
         self.pipe = None
         
         self.topic_map_en_to_ta = {
-            "world_news": "உலக செய்திகள்",
-            "politics": "அரசியல்",
-            "economy": "பொருளாதாரம்",
-            "science_health": "அறிவியல் & சுகாதாரம்",
-            "sports": "விளையாட்டு",
-            "crime_law": "குற்றம் & சட்டம்",
-            "education": "கல்வி",
-            "general": "பொது செய்திகள்",
-            "News": "செய்திகள்"
+            **{key: topic_labels("ta")[key] for key in topic_labels("en")},
+            "News": "செய்திகள்",
         }
         self.topic_map_ta_to_en = {v: k for k, v in self.topic_map_en_to_ta.items()}
 
     def _load_model(self):
         if self.pipe is None:
             print("Loading NLLB-200 model...")
-            self.pipe = pipeline("translation", model="facebook/nllb-200-distilled-600M", device=self.device)
+            tokenizer = AutoTokenizer.from_pretrained(TRANSLATION_MODEL_NAME, use_fast=False)
+            model = AutoModelForSeq2SeqLM.from_pretrained(TRANSLATION_MODEL_NAME)
+            self.pipe = pipeline(
+                "translation",
+                model=model,
+                tokenizer=tokenizer,
+                device=self.device,
+            )
         return self.pipe
 
     def translate(self, text, target_lang="ta"):

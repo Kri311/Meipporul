@@ -20,7 +20,8 @@ logger = logging.getLogger("Event_Generation")
 
 EVENT_CSV_FIELDNAMES = [
     "event_id", "headline", "start_date", "end_date", "location", 
-    "people", "organizations", "topics", "articles_count", "sources"
+    "people", "organizations", "topics", "articles_count", "sources",
+    "summary", "summary_en_bullets", "summary_ta_bullets",
 ]
 
 def generate_events(output_path=os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")), "data", "events_representation.csv")):
@@ -89,7 +90,13 @@ def generate_events(output_path=os.path.join(os.path.abspath(os.path.join(os.pat
                 "organizations": json.dumps(orgs_list, ensure_ascii=False),
                 "topics": cluster.topic or "",
                 "articles_count": len(articles),
-                "sources": json.dumps(list(sources), ensure_ascii=False)
+                "sources": json.dumps(list(sources), ensure_ascii=False),
+                "summary": json.dumps(cluster.summary or {
+                    "en": cluster.summary_en_bullets or [],
+                    "ta": cluster.summary_ta_bullets or [],
+                }, ensure_ascii=False),
+                "summary_en_bullets": json.dumps(cluster.summary_en_bullets or [], ensure_ascii=False),
+                "summary_ta_bullets": json.dumps(cluster.summary_ta_bullets or [], ensure_ascii=False),
             })
             
         events.sort(key=lambda x: x.get('end_date', ''), reverse=True)

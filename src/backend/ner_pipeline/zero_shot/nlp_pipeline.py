@@ -8,8 +8,10 @@ Key design decisions:
   - Tamil articles keep entities in Tamil script (no English translation).
   - English articles use gazetteer canonical forms.
   - Processes article *content* (clean_text), not just the title.
-  - Uses the fine-tuned MuRIL model if available locally, otherwise
-    falls back to the Babelscape multilingual NER.
+  - Uses the local fine-tuned MuRIL checkpoint when available. Its labels are
+    open-vocabulary values: the gazetteers normalize known aliases and add
+    recall, but do not restrict which PERSON/ORGANIZATION/LOCATION mentions
+    the transformer may extract. Babelscape is a load-failure fallback.
 """
 
 import os
@@ -22,7 +24,7 @@ import logging
 import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-from backend.models.database import SessionLocal, Article
+from backend.models.database import SessionLocal, Article, init_db
 from backend.ner_pipeline.zero_shot.normalization import (
     normalize_entity_text,
     strip_tamil_morphology,
@@ -42,19 +44,26 @@ logging.basicConfig(
 logger = logging.getLogger("NLP_Pipeline")
 
 # ---------------------------------------------------------------------------
-# Model selection — prefer local fine-tuned model if it exists
+# Model selection — prefer the local fine-tuned MuRIL checkpoint when present.
 # ---------------------------------------------------------------------------
 _finetune_model_path = os.path.join(
     os.path.dirname(__file__), '..', 'finetune', 'model', 'best'
 )
-if os.path.exists(_finetune_model_path):
-    NER_MODEL_NAME = os.getenv("NER_MODEL_NAME", _finetune_model_path)
+_default_teacher_model = "Babelscape/wikineural-multilingual-ner"
+# Existing fine-tuned artifacts were trained/evaluated against auto-generated
+# weak labels. Do not promote them over the independent multilingual baseline
+# by file existence alone. Opt in after reviewing fresh article-level metrics.
+_explicit_model = os.getenv("NER_MODEL_NAME")
+_prefer_finetuned = os.getenv("NER_PREFER_FINETUNED_MODEL", "1").casefold() in {"1", "true", "yes"}
+if _explicit_model:
+    NER_MODEL_NAME = _explicit_model
+elif _prefer_finetuned and os.path.exists(_finetune_model_path):
+    NER_MODEL_NAME = _finetune_model_path
 else:
-    NER_MODEL_NAME = os.getenv(
-        "NER_MODEL_NAME", "Babelscape/wikineural-multilingual-ner"
-    )
+    NER_MODEL_NAME = _default_teacher_model
 
 NER_BATCH_SIZE = int(os.getenv("NER_BATCH_SIZE", "16"))
+NER_MIN_CONFIDENCE = float(os.getenv("NER_MIN_CONFIDENCE", "0.35"))
 # Process more sentences for better entity coverage from article body
 # By default, NER sees every sentence. Set NER_MAX_SENTENCES to a positive
 # value only when deliberately trading entity recall for throughput.
@@ -172,35 +181,53 @@ def get_ner_pipeline():
     global _ner_pipeline
     if _ner_pipeline is None:
         from transformers import pipeline
-        device = 0 if torch.cuda.is_available() else -1
-        logger.info(f"Loading {NER_MODEL_NAME} on {'GPU' if device == 0 else 'CPU'}...")
-        # The locally fine-tuned MuRIL model ships a BERT vocab. Loading its
-        # bundled fast tokenizer can pick up stale tokenizer.json metadata and
-        # fail with an unrelated Mistral regex error; force the vocab tokenizer.
-        try:
-            if os.path.isdir(NER_MODEL_NAME):
-                from transformers import AutoModelForTokenClassification, AutoTokenizer
-                tokenizer = AutoTokenizer.from_pretrained(NER_MODEL_NAME, use_fast=False)
-                model = AutoModelForTokenClassification.from_pretrained(NER_MODEL_NAME)
-                _ner_pipeline = pipeline(
-                    "ner", model=model, tokenizer=tokenizer,
-                    aggregation_strategy="simple", device=device,
-                )
-            else:
-                _ner_pipeline = pipeline(
-                    "ner", model=NER_MODEL_NAME,
-                    aggregation_strategy="simple", device=device,
-                )
-        except Exception:
-            logger.exception("Configured NER model failed to load; using multilingual fallback.")
-            if os.path.isdir(NER_MODEL_NAME):
-                _ner_pipeline = pipeline(
-                    "ner", model="Babelscape/wikineural-multilingual-ner",
-                    aggregation_strategy="simple", device=device,
-                )
-            else:
-                raise
+        configured_device = 0 if torch.cuda.is_available() else -1
+        candidates = [NER_MODEL_NAME]
+        allow_teacher_fallback = os.getenv("NER_ALLOW_TEACHER_FALLBACK", "1").casefold() in {"1", "true", "yes"}
+        if allow_teacher_fallback and NER_MODEL_NAME != "Babelscape/wikineural-multilingual-ner":
+            candidates.append("Babelscape/wikineural-multilingual-ner")
+        devices = [configured_device, -1] if configured_device == 0 else [-1]
+        last_error = None
+        for model_name in candidates:
+            for device in dict.fromkeys(devices):
+                logger.info("Loading NER model %s on %s", model_name, "GPU" if device == 0 else "CPU")
+                try:
+                    # The local checkpoint includes tokenizer.json. Fast
+                    # tokenization preserves offsets for Hugging Face's NER
+                    # aggregation pipeline, which the slow tokenizer lacks.
+                    if os.path.isdir(model_name):
+                        from transformers import AutoModelForTokenClassification, AutoTokenizer
+                        tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+                        model = AutoModelForTokenClassification.from_pretrained(model_name)
+                        _ner_pipeline = pipeline(
+                            "ner", model=model, tokenizer=tokenizer,
+                            aggregation_strategy="simple", device=device,
+                        )
+                    else:
+                        _ner_pipeline = pipeline(
+                            "ner", model=model_name,
+                            aggregation_strategy="simple", device=device,
+                        )
+                    return _ner_pipeline
+                except Exception as exc:
+                    last_error = exc
+                    logger.exception("NER model load failed (%s on %s)", model_name, device)
+        raise RuntimeError("All configured and fallback NER model/device combinations failed") from last_error
     return _ner_pipeline
+
+
+def _run_ner(ner, sentences):
+    """Retry inference on CPU if the GPU runs out of memory."""
+    try:
+        return ner(sentences)
+    except RuntimeError as exc:
+        if not torch.cuda.is_available() or "out of memory" not in str(exc).casefold():
+            raise
+        logger.warning("CUDA ran out of memory during NER; retrying this batch on CPU")
+        torch.cuda.empty_cache()
+        ner.model.to("cpu")
+        ner.device = torch.device("cpu")
+        return ner(sentences)
 
 
 def normalize_text(text: str) -> str:
@@ -212,7 +239,7 @@ def normalize_text(text: str) -> str:
 
 def segment_sentences(text: str) -> list:
     """Simple regex-based sentence segmentation for EN/TA."""
-    sentences = re.split(r'(?<=[.!?|।])\s+', text)
+    sentences = re.split(r'(?<=[.!?।ஃ])\s+|\n+', text)
     return [s for s in sentences if len(s) > 5]
 
 
@@ -308,6 +335,7 @@ def resolve_entity(word: str, entity_group: str, language: str = "en") -> str | 
 
 def is_valid_entity(word: str) -> bool:
     """Filter out garbage NER tokens."""
+    word = re.sub(r"\s+", " ", str(word or "")).strip(" \t\r\n,;:|\"'`()[]{}")
     if word.startswith("##"):
         return False
     if re.match(r'^[\d\W_]+$', word):
@@ -315,7 +343,10 @@ def is_valid_entity(word: str) -> bool:
     # Reject tokens that start with Tamil combining marks
     if re.match(r'^[\u0BBE-\u0BCC\u0BCD]', word):
         return False
-    if len(word) < 2:
+    if len(word) < 2 or len(word) > 100 or len(word.split()) > 8:
+        return False
+    # Reject model fragments consisting only of punctuation / combining signs.
+    if not re.search(r"[A-Za-z\u0B80-\u0BFF]", word):
         return False
     return True
 
@@ -344,22 +375,28 @@ def process_nlp_batch() -> bool:
 
         for article in articles:
             lang = article.language if article.language in ("en", "ta") else "ta"
-            _, body = parse_clean_article(article.clean_text, article.title)
-            norm_text = normalize_text(body)
+            parsed_title, body = parse_clean_article(article.clean_text, article.title)
+            # Titles are often the densest, cleanest source of named entities.
+            # Keep them in front so bounded processing still sees the headline.
+            norm_text = normalize_text(". ".join(part for part in (parsed_title or article.title, body) if part))
             sentences = segment_sentences(norm_text)
             target_sentences = sentences[:MAX_SENTENCES] if MAX_SENTENCES > 0 else sentences
 
+            # Start fresh. Previously persisted named_entities came from older
+            # extractors and could contain whole headline fragments labelled as
+            # LOCATION; carrying them forward made bad entities permanent.
             entities = defaultdict(list)
-            # Keep extracted dateline/footer locations even if the model misses them.
-            if article.named_entities:
-                for location in article.named_entities.get("LOCATION", []):
-                    if location and location not in entities["LOCATION"]:
-                        entities["LOCATION"].append(location)
 
             if target_sentences:
-                results = ner(target_sentences)
+                results = _run_ner(ner, target_sentences)
                 for sentence_result in results:
                     for ent in sentence_result:
+                        try:
+                            confidence = float(ent.get("score", 1.0))
+                        except (TypeError, ValueError):
+                            confidence = 0.0
+                        if confidence < NER_MIN_CONFIDENCE:
+                            continue
                         group = ent.get('entity_group', ent.get('entity', ''))
                         word = ent.get('word', '').strip()
 
@@ -383,9 +420,17 @@ def process_nlp_batch() -> bool:
                                 entities[mapped_group].append(resolved)
 
             # Date extraction regex (language-agnostic fallback)
+            tamil_months = (
+                "ஜனவரி|பிப்ரவரி|மார்ச்|ஏப்ரல்|மே|ஜூன்|ஜூலை|ஆகஸ்ட்|"
+                "செப்டம்பர்|அக்டோபர்|நவம்பர்|டிசம்பர்"
+            )
             date_matches = re.findall(
-                r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b'
-                r'|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4}\b',
+                r'\b\d{4}-\d{1,2}-\d{1,2}\b'
+                r'|\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b'
+                r'|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4}\b'
+                r'|\b\d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{4}\b'
+                rf'|[\d\u0be6-\u0bef]{{1,2}}\s*(?:{tamil_months})(?:\s*[\d\u0be6-\u0bef]{{2,4}})?'
+                rf'|(?:{tamil_months})\s*[\d\u0be6-\u0bef]{{1,2}}(?:,?\s*[\d\u0be6-\u0bef]{{2,4}})?',
                 norm_text,
                 re.IGNORECASE,
             )
@@ -415,8 +460,19 @@ def process_nlp_batch() -> bool:
         db.close()
 
 
-def run_nlp_pipeline():
+def run_nlp_pipeline(reprocess_all=False):
     """Entry point: process all pending articles in batches."""
+    init_db()
+    if reprocess_all:
+        db = SessionLocal()
+        try:
+            count = db.query(Article).filter(
+                Article.clean_text.isnot(None), Article.clean_text != ""
+            ).update({Article.processing_status: "pending"}, synchronize_session=False)
+            db.commit()
+            logger.info("Queued %s existing articles for NER reprocessing with %s", count, NER_MODEL_NAME)
+        finally:
+            db.close()
     logger.info("Starting Advanced NLP Pipeline...")
     while True:
         has_more = process_nlp_batch()
@@ -425,4 +481,11 @@ def run_nlp_pipeline():
 
 
 if __name__ == "__main__":
-    run_nlp_pipeline()
+    import argparse
+    parser = argparse.ArgumentParser(description="Run multilingual article NER")
+    parser.add_argument(
+        "--reprocess-all", action="store_true",
+        help="Re-run NER for every article with cleaned text, not only pending rows",
+    )
+    args = parser.parse_args()
+    run_nlp_pipeline(reprocess_all=args.reprocess_all)

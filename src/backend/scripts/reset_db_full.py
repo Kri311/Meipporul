@@ -40,7 +40,6 @@ def reset_db_and_schema():
             article.embedding_model = None
             article.embedding_created_at = None
             article.cluster_id = None
-            article.semantic_text_hash = None
             if article.processing_status in ["embedded", "completed"]:
                 article.processing_status = "extracted"
         

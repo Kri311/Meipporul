@@ -1,7 +1,9 @@
 # Veritas Lens: Full Pipeline Architecture & Implementation Report
 
-> Historical architecture/evaluation snapshot. Verify any model, schema, or
-> deployment claim against the current repository README and ARTICLE_REPROCESSING.md.
+> Historical architecture/evaluation snapshot. For current models, schemas,
+> pipeline ordering, and run commands, use the repository README.md and
+> REPORT.md. ARTICLE_REPROCESSING.md covers only the separate historical URL
+> refresh tool.
 
 This document outlines the complete architectural design, implementation details, challenges resolved, and final evaluation metrics for the **Veritas Lens** text analytics project. The system is designed to ingest, process, semantically cluster, and extract Named Entities (NER) from multilingual news feeds (English and Tamil).
 

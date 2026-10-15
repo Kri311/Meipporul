@@ -1,4 +1,3 @@
-import csv
 import os
 import re
 import hashlib
@@ -15,7 +14,7 @@ from backend.ingestion.main import celery_app
 from backend.models.database import SessionLocal, RssFeed, FeedRun, Article
 from backend.ingestion.tasks.text_cleaning import (
     clean_html, deep_clean_text, detect_language, get_canonical_url,
-    is_recent_feed_date, normalize_news_datetime,
+    normalize_news_datetime,
     article_page_matches_title,
     SKIP_KEYWORDS, FESTIVAL_KEYWORDS, BREAKING_NEWS_KEYWORDS,
     classify_topic, apply_outlet_cleaners,
@@ -23,14 +22,6 @@ from backend.ingestion.tasks.text_cleaning import (
     extract_dateline_location, clean_article_title, clean_article_body,
     format_clean_article, build_article_description, is_usable_article_body,
 )
-
-CSV_FIELDNAMES = [
-    "content_hash", "guid", "outlet_slug", "title", "description", "author",
-    "published_at", "language", "article_length", "data_fetch_via",
-    "canonical_url", "extraction_method", "extraction_quality",
-    "processing_status", "raw_text", "clean_text", "topic", "image_url",
-]
-
 
 def normalize_str(s):
     s = normalize_political_parties(s)
@@ -148,9 +139,6 @@ def process_single_feed(self, feed_id: int):
                 except Exception:
                     pub_date = None
 
-            if not is_recent_feed_date(pub_date):
-                continue
-
             # Architecture Check: RSS Content vs Trafilatura
             # Most RSS feeds only give a 2-sentence summary in 'description'.
             rss_content_html = ''
@@ -203,6 +191,13 @@ def process_single_feed(self, feed_id: int):
             if not final_text and not page_title_mismatch:
                 final_text = deep_clean_text(clean_rss_text)
                 extraction_quality = 0.5
+
+            # Keep source bylines and LiveMint staff metadata out before the
+            # shared cleaner collapses paragraph boundaries.
+            if str(outlet_slug or "").casefold() == "livemint":
+                _, final_text = apply_outlet_cleaners(
+                    clean_article_title(title), final_text, outlet_slug, canonical_url
+                )
             
             # Skip articles with no usable content after cleaning
             if not final_text or len(final_text) < 200:
@@ -212,6 +207,8 @@ def process_single_feed(self, feed_id: int):
             # Apply per-outlet cleaners and classify topic
             loc, final_text = extract_dateline_location(final_text)
             title_clean, final_text = apply_outlet_cleaners(clean_article_title(title), final_text, outlet_slug, canonical_url)
+            if str(outlet_slug or "").casefold() == "livemint":
+                _, rss_content_html = apply_outlet_cleaners(title_clean, rss_content_html, outlet_slug, canonical_url)
             
             # Remove title duplication from body using a smarter line-by-line check BEFORE collapsing newlines
                 
@@ -255,7 +252,11 @@ def process_single_feed(self, feed_id: int):
             
             data_fetch_via = "Google News RSS" if "news.google.com" in feed.feed_url else "Native RSS"
             d_clean = build_article_description(
-                getattr(entry, "description", ""), final_text, title_clean
+                apply_outlet_cleaners(
+                    title_clean, getattr(entry, "description", ""), outlet_slug, canonical_url
+                )[1],
+                final_text,
+                title_clean,
             )
             formatted_clean_text = format_clean_article(title_clean, final_text)
             article = Article(
@@ -266,7 +267,7 @@ def process_single_feed(self, feed_id: int):
                 original_url=original_url,
                 title=title_clean,
                 description=d_clean,
-                author=getattr(entry, 'author', ''),
+                author=None if str(outlet_slug or "").casefold() == "livemint" else getattr(entry, 'author', ''),
                 image_url=image_url,
                 published_at=pub_date,
                 language=detected_lang,
@@ -290,47 +291,6 @@ def process_single_feed(self, feed_id: int):
                 feed_run.entries_failed += 1
                 continue
             
-            # Keep the canonical processed dataset current as each RSS article
-            # passes extraction, cleaning, language detection, and quality gates.
-            csv_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data")
-            os.makedirs(csv_dir, exist_ok=True)
-
-            csv_path = os.path.join(csv_dir, "trafiltura_preprocessed.csv")
-            
-            file_exists = os.path.exists(csv_path) and os.path.getsize(csv_path) > 0
-            with open(csv_path, "a", newline="", encoding="utf-8-sig") as csvfile:
-                fieldnames = CSV_FIELDNAMES
-                if file_exists:
-                    with open(csv_path, "r", encoding="utf-8-sig", newline="") as existing_csv:
-                        existing_header = next(csv.reader(existing_csv), [])
-                    if existing_header:
-                        fieldnames = existing_header
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
-                if not file_exists:
-                    writer.writeheader()
-                writer.writerow({
-                    "content_hash": content_hash,
-                    "guid": guid,
-                    "outlet_slug": outlet_slug,
-                    "title": article.title,
-                    "description": article.description,
-                    "author": article.author,
-                    "published_at": pub_date.isoformat() if pub_date else "",
-                    "language": detected_lang,
-                    "article_length": article_length_cat,
-                    "data_fetch_via": data_fetch_via,
-                    "canonical_url": canonical_url,
-                    "extraction_method": extraction_method,
-                    "extraction_quality": extraction_quality,
-                    "processing_status": "eligible",
-                    "raw_text": rss_content_html,
-                    "clean_text": formatted_clean_text,
-                    "topic": topic,
-                    "image_url": image_url or "",
-                })
-            # -------------------
-
-            
         feed_run.finished_at = datetime.utcnow()
         feed.last_success_at = datetime.utcnow()
         feed.consecutive_failures = 0
@@ -350,6 +310,12 @@ def process_single_feed(self, feed_id: int):
         raise self.retry(exc=e)
     finally:
         db.close()
+
+    if new_count:
+        # Export the complete committed database state under the export lock;
+        # never append a partial article row with empty model-derived columns.
+        from backend.export.csv_export import export_to_csv
+        export_to_csv()
         
     return {"feed_id": feed_id, "new_articles": new_count, "total_seen": seen_count}
 

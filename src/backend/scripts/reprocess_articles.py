@@ -39,7 +39,7 @@ FIELDNAMES = [
     "published_at", "language", "article_length", "data_fetch_via",
     "canonical_url", "extraction_method", "extraction_quality",
     "processing_status", "raw_text", "clean_text", "topic", "cluster_id",
-    "semantic_text_hash", "named_entities", "embedding",
+    "named_entities", "embedding", "summary",
 ]
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; VeritasLensNewsBot/1.0)",
@@ -214,9 +214,9 @@ def export_2026(input_path=DEFAULT_INPUT, output_path=DEFAULT_OUTPUT, batch_size
                         "clean_text": clean_text,
                         "topic": classify_topic(title, body, row.get("outlet_slug", ""), location),
                         "cluster_id": "",
-                        "semantic_text_hash": "",
                         "named_entities": json.dumps({"LOCATION": [location]} if location else {}, ensure_ascii=False),
                         "embedding": "",
+                        "summary": "[]",
                     })
                     written += 1
                     if batch_seen >= batch_size:

@@ -628,42 +628,10 @@ BREAKING_NEWS_KEYWORDS = ['breaking', 'flash', 'alert', 'முக்கிய �
 
 # ─── Topic Classification & Outlet Cleaners ───
 
-TOPIC_KEYWORDS = {
-    "politics": ["election", "parliament", "minister", "government", "bjp", "dmk", "congress", "aiadmk", "tvk", "pmk", "vck", "ntk", "தேர்தல்", "நாடாளுமன்றம்", "முதல்வர்", "அமைச்சர்", "அரசியல்", "சட்டமன்றம்", "எம்.எல்.ஏ"],
-    "world_news": ["international", "global", "united states", "u.s.", "china", "ukraine", "nato", "russia", "israel", "gaza", "united nations", "சர்வதேச", "உலக", "அமெரிக்கா", "சீனா", "ரஷ்யா", "இலங்கை"],
-    "economy": ["economy", "gdp", "inflation", "rbi", "stock market", "rupee", "business", "company", "கடன்", "பொருளாதாரம்", "பணவீக்கம்", "பங்குச்சந்தை", "ரூபாய்", "வர்த்தகம்", "பட்ஜெட்"],
-    "crime_law": ["murder", "arrest", "police", "court", "fir", "cbi", "supreme court", "high court", "கொலை", "கைது", "காவல்", "நீதிமன்றம்", "வழக்கு", "தீர்ப்பு", "சிபிஐ", "போலீஸ்"],
-    "science_health": ["research", "vaccine", "hospital", "climate", "space", "isro", "nasa", "health", "disease", "ஆராய்ச்சி", "தடுப்பூசி", "மருத்துவம்", "காலநிலை", "சுகாதாரம்", "விண்வெளி", "இஸ்ரோ", "மருத்துவமனை"],
-    "sports": ["cricket", "ipl", "match", "tournament", "champion", "olympics", "tennis", "football", "கிரிக்கெட்", "போட்டி", "வெற்றி", "ஐபிஎல்", "விளையாட்டு", "ஒலிம்பிக்"],
-    "education": ["school", "university", "exam", "neet", "syllabus", "students", "college", "பள்ளி", "பல்கலைக்கழகம்", "தேர்வு", "நீட்", "மாணவர்கள்", "கல்லூரி", "கல்வி"],
-    "technology": ["technology", "artificial intelligence", "artificial intelligence", "ai", "software", "cyber", "smartphone", "டிஜிட்டல்", "தொழில்நுட்பம்", "செயற்கை நுண்ணறிவு"],
-    "local_news": ["vellore", "chennai", "coimbatore", "madurai", "salem", "tiruchirappalli", "tirunelveli", "காஞ்சிபுரம்", "வேலூர்", "சென்னை", "மதுரை", "கோவை", "சேலம்", "தமிழ்நாடு"],
-}
-
 def classify_topic(title, text, outlet_slug="", location=""):
-    """Classify from headline and article prose; use token boundaries for English."""
-    title_text = str(title or "").casefold()
-    body_text = str(text or "")[:1200].casefold()
-    location_text = str(location or "").casefold()
-    scores = {topic: 0 for topic in TOPIC_KEYWORDS}
-    for topic, keywords in TOPIC_KEYWORDS.items():
-        for keyword in keywords:
-            term = keyword.casefold()
-            if re.search(r"[a-z]", term):
-                pattern = r"(?<![a-z0-9])" + re.escape(term).replace(r"\ ", r"\s+") + r"(?![a-z0-9])"
-                title_hits = len(re.findall(pattern, title_text))
-                body_hits = len(re.findall(pattern, body_text))
-                location_hits = len(re.findall(pattern, location_text))
-            else:
-                title_hits = title_text.count(term)
-                body_hits = body_text.count(term)
-                location_hits = location_text.count(term)
-            scores[topic] += title_hits * (5 if topic == "local_news" else 4) + min(body_hits, 3) + location_hits * 2
-    best_score = max(scores.values(), default=0)
-    if not best_score:
-        return "general"
-    # Stable topic ordering breaks ties; headline mentions carry most weight.
-    return next(topic for topic, score in scores.items() if score == best_score)
+    """Return a new taxonomy ID from the bilingual keyword fallback."""
+    from backend.semantic_processing.topic_classifier import classify_topic_rules
+    return classify_topic_rules(title, text, outlet_slug, location)
 
 
 def is_usable_article_body(body, minimum_chars=100, minimum_words=12):
@@ -721,6 +689,52 @@ def clean_news18(title, text, url=""):
 def clean_tamil_mykhel(title, text, url=""):
     return title, text
 
+
+def clean_livemint(title, text, url=""):
+    """Remove LiveMint page-level team lists and reporter biographies."""
+    text = clean_html(text)
+    lines = text.splitlines()
+    while lines:
+        first = lines[0].strip()
+        is_byline = re.fullmatch(
+            r"(?i)(?:Edited|Written) By [A-Z][A-Za-z.'’\-]+(?: [A-Z][A-Za-z.'’\-]+){0,2}",
+            first,
+        )
+        is_timestamp = re.fullmatch(
+            r"(?i)(?:Published|Updated)\s*\d{1,2} [A-Z][a-z]+ \d{4},? \d{1,2}:\d{2} (?:AM|PM) IST",
+            first,
+        )
+        if is_byline or is_timestamp:
+            lines.pop(0)
+        elif first:
+            break
+        else:
+            lines.pop(0)
+    text = "\n".join(lines)
+    cutoff_patterns = (
+        r"(?is)\bMeet\s+the\s+Team\b.*$",
+        r"(?is)\b(?:he|she|they)\s+can\s+be\s+reached\s+on\s+(?:LinkedIn|X|Twitter)\b.*$",
+        r"(?is)\bConnect\s+with\s+[A-Z][A-Za-z.'’\-]+\s+here\s+(?:on\s+)?(?:LinkedIn|X|Twitter)\b.*$",
+        r"(?is)\b[A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){1,3}\s+(?:joined|joins)\s+(?:the\s+)?Live\s?Mint\b.*$",
+        r"(?is)\b(?:before\s+joining|joined|joins)\s+(?:the\s+)?(?:Live\s?)?Mint\b.*$",
+        r"(?is)\b(?:prior\s+to\s+joining)\s+(?:the\s+)?(?:Live\s?)?Mint\b.*$",
+        r"(?is)\bAt\s+(?:the\s+)?(?:Live\s?)?Mint\s*,.*$",
+        r"(?is)\bAt\s+(?:the\s+)?(?:Live\s?)?Mint\s+(?:he|she|they)\b.*$",
+        r"(?is)\b[A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){1,3}\s+is\s+(?:a|an)\s+[^.!?]{0,100}\bjournalist\s+at\s+(?:the\s+)?(?:Live\s?)?Mint\b.*$",
+        r"(?is)\b[A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){1,3}\s+is\s+(?:a|an)\s+journalist\s+and\s+[^.!?]{0,100}\b(?:editor|reporter|producer)\b.*$",
+        r"(?is)\b(?:with\s+over|with\s+more\s+than)\s+(?:\d+|[a-z]+)\s+years?\s+of\s+experience.{0,300}\b(?:at|with)\s+(?:the\s+)?Live\s?Mint\b.*$",
+        r"(?is)\b[A-Z][A-Za-z.'’\-]+(?:\s+[A-Z][A-Za-z.'’\-]+){1,3}\s+is\s+(?:an?\s+)?(?:[A-Za-z]+\s+){0,3}(?:journalist|editor|reporter|correspondent|content\s+producer)\s+(?:with|who|at|based\s+in)\b.*$",
+        r"(?is)\b(?:he|she|they)\s+began\s+(?:his|her|their)\s+journalism\s+journey\b.*$",
+        r"(?is)\bAs\s+a\s+journalist,\s+(?:he|she|they)\b.*$",
+        r"(?is)\bHer\s+writing\s+(?:balances|focuses|reflects|spans)\b.*$",
+        r"(?is)\bOutside\s+(?:the\s+newsroom|work),\s+[A-Z][A-Za-z.'’\-]+\b.*$",
+        r"(?is)\b(?:a\s+postgraduate|she\s+holds\s+(?:a|an)|he\s+holds\s+(?:a|an)).{0,500}\b(?:before\s+joining|joined|joins)\s+(?:the\s+)?Live\s?Mint\b.*$",
+    )
+    for pattern in cutoff_patterns:
+        text = re.sub(pattern, "", text)
+    text = re.sub(r"(?i)\s*(?:\n\s*)?\(with\s+[A-Za-z ,&]+\s+inputs\)\s*$", "", text)
+    return title, re.sub(r"\s+", " ", text).strip()
+
 def apply_outlet_cleaners(title, text, outlet_slug, url=""):
     if outlet_slug == "bbc_tamil":
         return clean_bbc_tamil(title, text)
@@ -736,4 +750,6 @@ def apply_outlet_cleaners(title, text, outlet_slug, url=""):
         return clean_news18(title, text, url)
     elif outlet_slug == "tamil_mykhel":
         return clean_tamil_mykhel(title, text, url)
+    elif str(outlet_slug or "").casefold() == "livemint":
+        return clean_livemint(title, text, url)
     return title, text

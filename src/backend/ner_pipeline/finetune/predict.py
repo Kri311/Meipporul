@@ -52,7 +52,10 @@ def load_model():
             )
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"[NER Inference] Loading fine-tuned model from {model_path} on {device}")
-        _tokenizer = AutoTokenizer.from_pretrained(model_path)
+        # Inference reconstructs spans from offset_mapping, which requires a
+        # fast tokenizer. The training dataset separately supports slow
+        # tokenizers for safe BIO alignment.
+        _tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
         _model = AutoModelForTokenClassification.from_pretrained(model_path).to(device)
         _model.eval()
         print(f"[NER Inference] Model loaded. Labels: {len(ID2LABEL)}")

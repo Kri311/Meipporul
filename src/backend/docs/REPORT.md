@@ -1,7 +1,8 @@
 # Veritas Lens - Interactive Development Report
 
 > Historical development report. Current runtime behavior and commands are
-> maintained in the repository README and ARTICLE_REPROCESSING.md.
+> maintained in the repository README.md and REPORT.md. ARTICLE_REPROCESSING.md
+> describes the separate historical URL refresh workflow.
 
 ## Objective
 Build the RSS feed ingestion service with Docker, aligned with Phase 1 of `JOURNAL.md`. This will be built interactively to ensure a thorough understanding of the architecture, components, and data flow.
