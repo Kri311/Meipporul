@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="3166" viewBox="0 0 1700 3166">
+<rect width="1700" height="3166" fill="#fdfbf6"/>
+<rect x="52" y="36" width="1596" height="150" rx="10" fill="#ffffff" stroke="(26, 18, 8)" stroke-width="3"/>
+<text x="850" y="74" font-family="DejaVu Sans" font-size="34" fill="#1a1208" text-anchor="middle" dominant-baseline="middle">VERITAS LENS — NEWS INTELLIGENCE PIPELINE</text>
+<text x="850" y="114" font-family="DejaVu Sans" font-size="19" fill="#42342a" text-anchor="middle" dominant-baseline="middle">RSS ingestion  ·  bilingual NER  ·  E5 event clustering  ·  summaries  ·  web delivery</text>
+<text x="850" y="148" font-family="DejaVu Sans" font-size="19" fill="#6b5a48" text-anchor="middle" dominant-baseline="middle">English + Tamil  |  PostgreSQL source of truth  |  trafiltura_preprocessed.csv canonical export</text>
+<rect x="52" y="214" width="1596" height="48" rx="5" fill="#2e2418"/>
+<text x="72" y="238.0" font-family="DejaVu Sans" font-size="20" fill="#fdfbf6" text-anchor="start" dominant-baseline="middle">A  ·  FEED INGESTION AND CLEANING</text>
+<text x="1185" y="238.0" font-family="DejaVu Sans" font-size="19" fill="#d9ccb4" text-anchor="start" dominant-baseline="middle">RSS sources → verified, normalized article text</text>
+<rect x="52" y="280" width="1596" height="120" rx="8" fill="#faf7f0" stroke="(107, 90, 72)" stroke-width="3"/>
+<text x="72" y="308" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">CONFIGURED NEWS FEEDS</text>
+<rect x="1488" y="290" width="126" height="28" rx="14" fill="#ece6da" stroke="#6b5a48" stroke-width="2"/>
+<text x="1551.0" y="304.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#4a3c2e" text-anchor="middle" dominant-baseline="middle">INPUT</text>
+<text x="72" y="336" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Enabled native RSS / Google News feeds for English and Tamil outlets</text>
+<text x="72" y="363" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Fetch publication time, title, URL, snippet, metadata and lead image</text>
+<line x1="850" y1="402" x2="850" y2="438" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,438 841,424 859,424" fill="#1a1208"/>
+<rect x="52" y="446" width="1596" height="147" rx="8" fill="#faf7f0" stroke="(63, 125, 58)" stroke-width="3"/>
+<text x="72" y="474" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">FETCH FULL ARTICLE AND APPLY QUALITY GATES</text>
+<rect x="1488" y="456" width="126" height="28" rx="14" fill="#e8f3e6" stroke="#3f7d3a" stroke-width="2"/>
+<text x="1551.0" y="470.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#2c5c28" text-anchor="middle" dominant-baseline="middle">EXTRACTION</text>
+<text x="72" y="502" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Trafilatura extracts page text when available; RSS content is the fallback</text>
+<text x="72" y="529" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Reject stale/duplicate items, title–page mismatches and unusable short text</text>
+<text x="72" y="556" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Select article image; reject generic or unrelated feed artwork</text>
+<line x1="850" y1="595" x2="850" y2="631" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,631 841,617 859,617" fill="#1a1208"/>
+<rect x="52" y="639" width="1596" height="147" rx="8" fill="#faf7f0" stroke="(63, 125, 58)" stroke-width="3"/>
+<text x="72" y="667" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">CLEAN AND NORMALIZE</text>
+<rect x="1488" y="649" width="156" height="28" rx="14" fill="#e8f3e6" stroke="#3f7d3a" stroke-width="2"/>
+<text x="1566.0" y="663.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#2c5c28" text-anchor="middle" dominant-baseline="middle">NORMALIZATION</text>
+<text x="72" y="695" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Remove HTML, outlet/editor boilerplate, duplicate text and bad source fragments</text>
+<text x="72" y="722" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Apply outlet-specific cleaners; normalize dates, language, title and body</text>
+<text x="72" y="749" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Keep accepted source content in a consistent title + body representation</text>
+<line x1="850" y1="788" x2="850" y2="824" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,824 841,810 859,810" fill="#1a1208"/>
+<rect x="52" y="832" width="1596" height="120" rx="8" fill="#faf7f0" stroke="(107, 90, 72)" stroke-width="3"/>
+<text x="72" y="860" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">PERSIST CANONICAL ARTICLES</text>
+<rect x="1488" y="842" width="159" height="28" rx="14" fill="#ece6da" stroke="#6b5a48" stroke-width="2"/>
+<text x="1567.5" y="856.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#4a3c2e" text-anchor="middle" dominant-baseline="middle">DATABASE + CSV</text>
+<text x="72" y="888" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">PostgreSQL stores article rows, metadata, image and processing state</text>
+<text x="72" y="915" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">trafiltura_preprocessed.csv is rebuilt from PostgreSQL as the canonical export</text>
+<line x1="850" y1="954" x2="850" y2="990" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,990 841,976 859,976" fill="#1a1208"/>
+<rect x="52" y="998" width="1596" height="147" rx="8" fill="#faf7f0" stroke="(184, 137, 31)" stroke-width="3" stroke-dasharray="9 6"/>
+<text x="72" y="1026" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">OPTIONAL OFFLINE NER TRAINING</text>
+<rect x="1488" y="1008" width="126" height="28" rx="14" fill="#fdf2dc" stroke="#b8891f" stroke-width="2"/>
+<text x="1551.0" y="1022.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#8a6612" text-anchor="middle" dominant-baseline="middle">OPTIONAL</text>
+<text x="72" y="1054" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Build bilingual corpus from canonical CSV; Babelscape teacher + gazetteer create weak BIO labels</text>
+<text x="72" y="1081" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Split by article, fine-tune MuRIL, then evaluate; only enable after independent review</text>
+<text x="72" y="1108" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">If skipped or unvalidated, production NER uses the Babelscape multilingual baseline</text>
+<line x1="850" y1="1147" x2="850" y2="1183" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,1183 841,1169 859,1169" fill="#1a1208"/>
+<text x="868" y="1165.0" font-family="DejaVu Sans" font-size="14" fill="#6b5a48" text-anchor="start" dominant-baseline="middle">validated MuRIL checkpoint or default baseline</text>
+<rect x="52" y="1191" width="1596" height="48" rx="5" fill="#2e2418"/>
+<text x="72" y="1215.0" font-family="DejaVu Sans" font-size="20" fill="#fdfbf6" text-anchor="start" dominant-baseline="middle">B  ·  ENTITY AND SEMANTIC ENRICHMENT</text>
+<text x="1203" y="1215.0" font-family="DejaVu Sans" font-size="19" fill="#d9ccb4" text-anchor="start" dominant-baseline="middle">per-article features → cohesive event groups</text>
+<rect x="52" y="1257" width="1596" height="147" rx="8" fill="#faf7f0" stroke="(63, 125, 58)" stroke-width="3"/>
+<text x="72" y="1285" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">BILINGUAL NAMED ENTITY RECOGNITION</text>
+<rect x="1488" y="1267" width="126" height="28" rx="14" fill="#e8f3e6" stroke="#3f7d3a" stroke-width="2"/>
+<text x="1551.0" y="1281.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#2c5c28" text-anchor="middle" dominant-baseline="middle">NER</text>
+<text x="72" y="1313" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Default Babelscape multilingual NER; opt-in MuRIL checkpoint after review</text>
+<text x="72" y="1340" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Use headline + cleaned body; confidence filter, Tamil normalization and aliases</text>
+<text x="72" y="1367" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Store PERSON / ORGANIZATION / LOCATION / DATE and linked entity forms</text>
+<line x1="850" y1="1406" x2="850" y2="1442" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,1442 841,1428 859,1428" fill="#1a1208"/>
+<rect x="52" y="1450" width="1596" height="147" rx="8" fill="#faf7f0" stroke="(63, 125, 58)" stroke-width="3"/>
+<text x="72" y="1478" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">MULTILINGUAL E5 EMBEDDINGS</text>
+<rect x="1488" y="1460" width="129" height="28" rx="14" fill="#e8f3e6" stroke="#3f7d3a" stroke-width="2"/>
+<text x="1552.5" y="1474.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#2c5c28" text-anchor="middle" dominant-baseline="middle">EMBEDDINGS</text>
+<text x="72" y="1506" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">intfloat/multilingual-e5-base encodes headline and body passages (768 dimensions)</text>
+<text x="72" y="1533" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Headline gets higher weight; long bodies are split into chunks</text>
+<text x="72" y="1560" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Persist vector, model name and semantic text hash to detect stale embeddings</text>
+<line x1="850" y1="1599" x2="850" y2="1635" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,1635 841,1621 859,1621" fill="#1a1208"/>
+<rect x="52" y="1643" width="1596" height="147" rx="8" fill="#faf7f0" stroke="(63, 125, 58)" stroke-width="3"/>
+<text x="72" y="1671" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">DBSCAN EVENT CLUSTERING</text>
+<rect x="1488" y="1653" width="126" height="28" rx="14" fill="#e8f3e6" stroke="#3f7d3a" stroke-width="2"/>
+<text x="1551.0" y="1667.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#2c5c28" text-anchor="middle" dominant-baseline="middle">CLUSTERING</text>
+<text x="72" y="1699" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Cosine-distance DBSCAN; same-language and publication-date guards</text>
+<text x="72" y="1726" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">NER overlap only corroborates sufficiently similar E5 vectors</text>
+<text x="72" y="1753" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Pairwise cohesion splits chaining errors; noise remains a standalone story</text>
+<line x1="850" y1="1792" x2="850" y2="1828" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,1828 841,1814 859,1814" fill="#1a1208"/>
+<rect x="52" y="1836" width="1596" height="48" rx="5" fill="#2e2418"/>
+<text x="72" y="1860.0" font-family="DejaVu Sans" font-size="20" fill="#fdfbf6" text-anchor="start" dominant-baseline="middle">C  ·  EVENT INTELLIGENCE</text>
+<text x="962" y="1860.0" font-family="DejaVu Sans" font-size="19" fill="#d9ccb4" text-anchor="start" dominant-baseline="middle">topic, summary and event export are computed before page requests</text>
+<rect x="52" y="1902" width="1596" height="147" rx="8" fill="#faf7f0" stroke="(63, 125, 58)" stroke-width="3"/>
+<text x="72" y="1930" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">TOPIC CLASSIFICATION</text>
+<rect x="1488" y="1912" width="126" height="28" rx="14" fill="#e8f3e6" stroke="#3f7d3a" stroke-width="2"/>
+<text x="1551.0" y="1926.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#2c5c28" text-anchor="middle" dominant-baseline="middle">E5 + NER</text>
+<text x="72" y="1958" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Event title + article text encoded by E5; typed NER features can be fused</text>
+<text x="72" y="1985" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Logistic Regression predicts the bilingual taxonomy; rules provide fallback</text>
+<text x="72" y="2012" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">E5 + NER is selected only when its measured validation gain justifies it</text>
+<line x1="850" y1="2051" x2="850" y2="2087" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,2087 841,2073 859,2073" fill="#1a1208"/>
+<rect x="52" y="2095" width="1596" height="147" rx="8" fill="#faf7f0" stroke="(63, 125, 58)" stroke-width="3"/>
+<text x="72" y="2123" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">PERSIST EVENT BULLET SUMMARIES</text>
+<rect x="1488" y="2105" width="158" height="28" rx="14" fill="#e8f3e6" stroke="#3f7d3a" stroke-width="2"/>
+<text x="1567.0" y="2119.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#2c5c28" text-anchor="middle" dominant-baseline="middle">SUMMARIZATION</text>
+<text x="72" y="2151" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Generate English and Tamil bullets per event before readers open the page</text>
+<text x="72" y="2178" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Multilingual XLSum model; source-grounded extractive fallback if unavailable</text>
+<text x="72" y="2205" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Save in PostgreSQL by source/model hash; reuse until content changes</text>
+<line x1="850" y1="2244" x2="850" y2="2280" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,2280 841,2266 859,2266" fill="#1a1208"/>
+<rect x="52" y="2288" width="1596" height="120" rx="8" fill="#faf7f0" stroke="(107, 90, 72)" stroke-width="3"/>
+<text x="72" y="2316" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">BUILD ENRICHED EXPORTS</text>
+<rect x="1488" y="2298" width="126" height="28" rx="14" fill="#ece6da" stroke="#6b5a48" stroke-width="2"/>
+<text x="1551.0" y="2312.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#4a3c2e" text-anchor="middle" dominant-baseline="middle">EXPORT</text>
+<text x="72" y="2344" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Generate event representation: headline, dates, location, entities, sources and topic</text>
+<text x="72" y="2371" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Export article + summary fields to trafiltura_preprocessed.csv and events_representation.csv</text>
+<line x1="850" y1="2410" x2="850" y2="2446" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,2446 841,2432 859,2432" fill="#1a1208"/>
+<rect x="52" y="2454" width="1596" height="48" rx="5" fill="#2e2418"/>
+<text x="72" y="2478.0" font-family="DejaVu Sans" font-size="20" fill="#fdfbf6" text-anchor="start" dominant-baseline="middle">D  ·  API, WEB UI AND RECURRING UPDATES</text>
+<text x="1324" y="2478.0" font-family="DejaVu Sans" font-size="19" fill="#d9ccb4" text-anchor="start" dominant-baseline="middle">serving reads stored event data</text>
+<rect x="52" y="2520" width="1596" height="147" rx="8" fill="#faf7f0" stroke="(63, 125, 58)" stroke-width="3"/>
+<text x="72" y="2548" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">FASTAPI EVENT API</text>
+<rect x="1488" y="2530" width="126" height="28" rx="14" fill="#e8f3e6" stroke="#3f7d3a" stroke-width="2"/>
+<text x="1551.0" y="2544.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#2c5c28" text-anchor="middle" dominant-baseline="middle">BACKEND</text>
+<text x="72" y="2576" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Read PostgreSQL events, article details, sources, image and stored bullet summaries</text>
+<text x="72" y="2603" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Reject incohesive legacy clusters from event pages; expose their stories separately</text>
+<text x="72" y="2630" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Breaking badge requires recent coverage from at least two independent outlets</text>
+<line x1="850" y1="2669" x2="850" y2="2705" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,2705 841,2691 859,2691" fill="#1a1208"/>
+<rect x="52" y="2713" width="1596" height="120" rx="8" fill="#faf7f0" stroke="(63, 125, 58)" stroke-width="3"/>
+<text x="72" y="2741" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">NEXT.JS READER EXPERIENCE</text>
+<rect x="1488" y="2723" width="126" height="28" rx="14" fill="#e8f3e6" stroke="#3f7d3a" stroke-width="2"/>
+<text x="1551.0" y="2737.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#2c5c28" text-anchor="middle" dominant-baseline="middle">FRONTEND</text>
+<text x="72" y="2769" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">English / Tamil topic feed, event detail, multi-source articles and bullet summaries</text>
+<text x="72" y="2796" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">Refresh event feed every 60 seconds; refresh again when a stale tab becomes visible</text>
+<line x1="850" y1="2835" x2="850" y2="2871" stroke="#1a1208" stroke-width="3"/>
+<polygon points="850,2871 841,2857 859,2857" fill="#1a1208"/>
+<rect x="52" y="2879" width="1596" height="147" rx="8" fill="#faf7f0" stroke="(107, 90, 72)" stroke-width="3"/>
+<text x="72" y="2907" font-family="DejaVu Sans" font-size="21" fill="#1a1208" text-anchor="start" dominant-baseline="middle">AUTOMATION AND LOCAL SERVICES</text>
+<rect x="1488" y="2889" width="126" height="28" rx="14" fill="#ece6da" stroke="#6b5a48" stroke-width="2"/>
+<text x="1551.0" y="2903.0" font-family="DejaVu Sans" font-weight="bold" font-size="14" fill="#4a3c2e" text-anchor="middle" dominant-baseline="middle">OPERATIONS</text>
+<text x="72" y="2935" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">start_daemon.sh runs RSS ingestion + enrichment on a 5-minute cycle by default</text>
+<text x="72" y="2962" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">start_backend.sh serves FastAPI; start_frontend.sh serves the Next.js development UI</text>
+<text x="72" y="2989" font-family="DejaVu Sans" font-size="17" fill="#42342a" text-anchor="start" dominant-baseline="middle">One feed cycle: fetch → normalize/export → NER → E5/DBSCAN → topics → summaries</text>
+<rect x="52" y="3056" width="1596" height="76" rx="7" fill="#efe6d4" stroke="(26, 18, 8)" stroke-width="2"/>
+<text x="850" y="3081" font-family="DejaVu Sans" font-size="14" fill="#42342a" text-anchor="middle" dominant-baseline="middle">PIPELINE ORDER FROM scripts/run_pipeline.sh AND run_semantics_and_ner.sh</text>
+<text x="850" y="3108" font-family="DejaVu Sans" font-size="19" fill="#42342a" text-anchor="middle" dominant-baseline="middle">Model training is an optional offline branch; serving uses persisted summaries and entities.</text>
+</svg>
