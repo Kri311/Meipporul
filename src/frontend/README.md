@@ -1,4 +1,4 @@
-# Veritas Lens web client
+# Meiporul — Eye of Truth web client
 
 The Next.js 16 / React 19 app presents event clusters in separate English and
 Tamil lanes. Language selection is passed to the API and retained when opening
