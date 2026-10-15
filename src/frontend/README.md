@@ -27,5 +27,11 @@ frontend environment when the API is not at its configured local default.
 - /events/{id}?lang=en|ta: event summary, source timeline, and entities for the
   selected language.
 
+The feed and event detail pages refresh data every 60 seconds while visible,
+and refresh stale data when a hidden tab becomes visible again. This is an API
+refresh only: RSS fetching and model enrichment run on the backend pipeline
+schedule. Event pages read persisted article/event bullets, so opening a page
+does not require a new summarizer generation.
+
 The App Router page props are promises in this installed Next.js version;
 follow the local Next.js API reference when changing route components.

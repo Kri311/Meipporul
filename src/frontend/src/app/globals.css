@@ -1,17 +1,151 @@
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/InterVariable.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Noto Sans Tamil";
+  src: url("/fonts/NotoSansTamil-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Noto Sans Tamil";
+  src: url("/fonts/NotoSansTamil-SemiBold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Noto Sans Tamil";
+  src: url("/fonts/NotoSansTamil-Bold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 700 900;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light;
   --ink: #172321;
   --muted: #65726c;
   --paper: #f5f4ef;
   --line: #dce2dc;
+  --line-strong: #bdc8c1;
   --green: #285a46;
-  --font-inter: Arial, "Noto Sans Tamil", sans-serif;
+  --nav-bg: #f7f5ef;
+  --surface: #fffefa;
+  --surface-raised: #ffffff;
+  --summary-ink: #58635d;
+  --topic-ink: #426657;
+  --topic-bg: #e8f0ea;
+  --chip-bg: #dedbd4;
+  --focus-ring: #438c69;
+  --scroll-track: #e7e8e2;
+  --scroll-thumb: #52685d;
+  --font-inter: "Inter", "Noto Sans Tamil", sans-serif;
+  --font-tamil: "Noto Sans Tamil", sans-serif;
   --font-georgia: Georgia, "Noto Serif Tamil", serif;
+}
+:root[data-reader-theme="dark"] {
+  color-scheme: dark;
+  --ink: #e7ece8;
+  --muted: #a9b5ae;
+  --paper: #151b18;
+  --line: #35423b;
+  --line-strong: #536359;
+  --green: #91c5a8;
+  --nav-bg: #1c2420;
+  --surface: #202925;
+  --surface-raised: #252f2a;
+  --summary-ink: #c2ccc5;
+  --topic-ink: #c0dfcb;
+  --topic-bg: #2c4135;
+  --chip-bg: #344139;
+  --focus-ring: #87cda3;
+  --scroll-track: #202925;
+  --scroll-thumb: #74897b;
 }
 * { box-sizing: border-box; }
 html { min-height: 100%; background: var(--paper); }
-body { min-height: 100vh; margin: 0; background: var(--paper); color: var(--ink); -webkit-font-smoothing: antialiased; }
+body { min-height: 100vh; margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font-inter); -webkit-font-smoothing: antialiased; }
 button, input, select { font: inherit; }
 a { color: inherit; }
 ::selection { background: #c9ded1; color: #172321; }
-:focus-visible { outline: 3px solid #438c69; outline-offset: 3px; }
+:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 3px; }
+
+/* Tamil pulli and vowel marks need a Tamil-aware font and natural spacing. */
+:lang(ta) {
+  font-family: var(--font-tamil);
+  font-kerning: normal;
+  font-synthesis: none;
+  font-weight: 600;
+  line-height: 1.8;
+}
+:lang(ta) * {
+  font-family: var(--font-tamil) !important;
+  font-synthesis: none;
+  font-weight: 600 !important;
+  letter-spacing: normal !important;
+}
+:lang(ta) h1,
+:lang(ta) h2,
+:lang(ta) h3 {
+  font-weight: 700 !important;
+  line-height: 1.45 !important;
+}
+
+/* Keep the Latin brand wordmark identical in English and Tamil layouts. */
+.site-brand {
+  font-family: var(--font-inter) !important;
+  font-size: 1.25rem !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.04em !important;
+  line-height: 1 !important;
+  display: inline-flex;
+  align-items: center;
+}
+
+.reader-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.reader-mode-toggle:hover { border-color: var(--green); }
+.reader-mode-toggle span:first-child { font-size: 1rem; line-height: 1; }
+
+hr { display: none !important; }
+
+/* Slim, high-contrast scrollbar for long news timelines and topic lists. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+}
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: var(--scroll-track); }
+::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border: 3px solid var(--scroll-track);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--green); }
+@media (max-width: 620px) {
+  .reader-mode-toggle { width: 36px; padding: 6px; }
+  .reader-mode-toggle span:not(:first-child) { display: none; }
+}

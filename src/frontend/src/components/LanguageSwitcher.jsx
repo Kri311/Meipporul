@@ -10,6 +10,10 @@ export default function LanguageSwitcher({ currentLang }) {
   const getUrl = (lang) => {
     const params = new URLSearchParams(searchParams);
     params.set('lang', lang);
+    // Topic labels are localized (for example, "politics" vs "அரசியல்").
+    // Carrying the current language's tag across makes the destination appear
+    // empty when that label has no equivalent in the other language.
+    params.delete('tag');
     return `${pathname}?${params.toString()}`;
   };
 
@@ -18,7 +22,7 @@ export default function LanguageSwitcher({ currentLang }) {
       <Link
         href={getUrl('en')}
         style={{
-          color: currentLang === 'en' ? '#171717' : '#9b9892',
+          color: currentLang === 'en' ? 'var(--ink)' : 'var(--muted)',
           fontWeight: 700,
           textDecoration: 'none',
         }}
@@ -28,7 +32,7 @@ export default function LanguageSwitcher({ currentLang }) {
       <Link
         href={getUrl('ta')}
         style={{
-          color: currentLang === 'ta' ? '#171717' : '#9b9892',
+          color: currentLang === 'ta' ? 'var(--ink)' : 'var(--muted)',
           fontWeight: 700,
           textDecoration: 'none',
         }}
