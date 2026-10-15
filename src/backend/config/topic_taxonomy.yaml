@@ -1,0 +1,89 @@
+# Fresh editorial taxonomy for the English and Tamil feeds. These labels are
+# new project annotations; existing dataset topic values are not training data.
+topics:
+  tamil_nadu_governance:
+    label_en: Tamil Nadu governance
+    label_ta: தமிழ்நாடு ஆட்சி
+    description_en: Tamil Nadu state government, state politics, ministers, the assembly, state parties and state elections
+    description_ta: தமிழ்நாடு அரசு, மாநில அரசியல், அமைச்சர்கள், சட்டமன்றம், மாநிலக் கட்சிகள் மற்றும் மாநிலத் தேர்தல்கள்
+    keywords:
+      en: [Tamil Nadu government, Tamil Nadu minister, Tamil Nadu assembly, Chennai government, DMK, AIADMK, TVK, state election, chief minister]
+      ta: [தமிழ்நாடு அரசு, தமிழக அரசு, முதலமைச்சர், முதல்வர், சட்டமன்றம், அமைச்சரவை, திமுக, அதிமுக, தவெக, தமிழக வெற்றி]
+  india_governance:
+    label_en: India governance
+    label_ta: இந்திய ஆட்சி
+    description_en: India's national government, Parliament, central politics, national parties, national elections and public policy
+    description_ta: இந்திய மத்திய அரசு, நாடாளுமன்றம், தேசிய அரசியல், தேசியக் கட்சிகள், பொதுத் தேர்தல்கள் மற்றும் அரசுக் கொள்கைகள்
+    keywords:
+      en: [Indian government, Parliament, Lok Sabha, Rajya Sabha, Prime Minister, election commission, BJP, Congress, national election]
+      ta: [இந்திய அரசு, நாடாளுமன்றம், மக்களவை, மாநிலங்களவை, பிரதமர், தேர்தல் ஆணையம், பாஜக, காங்கிரஸ்]
+  world_affairs:
+    label_en: World affairs
+    label_ta: உலக நிகழ்வுகள்
+    description_en: International relations, foreign governments, wars, diplomacy and events involving countries outside India
+    description_ta: சர்வதேச உறவுகள், வெளிநாட்டு அரசுகள், போர்கள், தூதரகம் மற்றும் இந்தியாவுக்கு வெளியேயுள்ள நாடுகளின் நிகழ்வுகள்
+    keywords:
+      en: [United States, China, Russia, Ukraine, Israel, Gaza, United Nations, international, foreign affairs, war, ceasefire]
+      ta: [அமெரிக்கா, சீனா, ரஷ்யா, உக்ரைன், இஸ்ரேல், காசா, ஐக்கிய நாடுகள், சர்வதேச, போர், போர் நிறுத்தம்]
+  crime_and_justice:
+    label_en: Crime and justice
+    label_ta: குற்றம் மற்றும் நீதி
+    description_en: Crime, police investigations, arrests, courts, legal proceedings, trials and judgments
+    description_ta: குற்றங்கள், காவல்துறை விசாரணைகள், கைதுகள், நீதிமன்றங்கள், சட்ட நடவடிக்கைகள், வழக்குகள் மற்றும் தீர்ப்புகள்
+    keywords:
+      en: [police, arrest, murder, court, Supreme Court, High Court, investigation, trial, verdict, crime, FIR]
+      ta: [காவல்துறை, கைது, கொலை, நீதிமன்றம், உச்சநீதிமன்றம், உயர்நீதிமன்றம், விசாரணை, தீர்ப்பு, வழக்கு, குற்றம்]
+  business_and_economy:
+    label_en: Business and economy
+    label_ta: வணிகம் மற்றும் பொருளாதாரம்
+    description_en: Businesses, companies, markets, finance, banking, trade, employment in business and economic policy
+    description_ta: வணிகங்கள், நிறுவனங்கள், சந்தைகள், நிதி, வங்கிகள், வர்த்தகம், பொருளாதாரம் மற்றும் பொருளாதாரக் கொள்கைகள்
+    keywords:
+      en: [economy, inflation, Reserve Bank, RBI, stock market, company, business, rupee, budget, trade, investment]
+      ta: [பொருளாதாரம், பணவீக்கம், ரிசர்வ் வங்கி, பங்குச்சந்தை, நிறுவனம், வணிகம், ரூபாய், பட்ஜெட், வர்த்தகம், முதலீடு]
+  public_services_and_incidents:
+    label_en: Public services and incidents
+    label_ta: பொதுச் சேவைகள் மற்றும் சம்பவங்கள்
+    description_en: Transport, roads, utilities, local government services, accidents, fires, floods and other public incidents
+    description_ta: போக்குவரத்து, சாலைகள், மின்சாரம், குடிநீர், உள்ளாட்சி சேவைகள், விபத்துகள், தீ, வெள்ளம் மற்றும் பொது சம்பவங்கள்
+    keywords:
+      en: [transport, railway, metro, road, power outage, water supply, flood, cyclone, accident, fire, rescue, civic]
+      ta: [போக்குவரத்து, ரயில்வே, மெட்ரோ, சாலை, மின்தடை, குடிநீர், வெள்ளம், புயல், விபத்து, தீ, மீட்பு]
+  health_science_environment:
+    label_en: Health, science and environment
+    label_ta: சுகாதாரம், அறிவியல் மற்றும் சுற்றுச்சூழல்
+    description_en: Public health, hospitals, medicine, scientific research, space, climate and environmental issues
+    description_ta: பொது சுகாதாரம், மருத்துவமனைகள், மருத்துவம், அறிவியல் ஆய்வு, விண்வெளி, காலநிலை மற்றும் சுற்றுச்சூழல்
+    keywords:
+      en: [health, hospital, disease, vaccine, medical, research, science, climate, environment, ISRO, space]
+      ta: [சுகாதாரம், மருத்துவமனை, நோய், தடுப்பூசி, மருத்துவம், ஆராய்ச்சி, அறிவியல், காலநிலை, சுற்றுச்சூழல், இஸ்ரோ, விண்வெளி]
+  education_and_employment:
+    label_en: Education and employment
+    label_ta: கல்வி மற்றும் வேலைவாய்ப்பு
+    description_en: Schools, colleges, universities, exams, students, education policy, recruitment and jobs
+    description_ta: பள்ளிகள், கல்லூரிகள், பல்கலைக்கழகங்கள், தேர்வுகள், மாணவர்கள், கல்விக் கொள்கை, ஆட்சேர்ப்பு மற்றும் வேலைவாய்ப்பு
+    keywords:
+      en: [school, college, university, exam, student, education, recruitment, jobs, employment, NEET]
+      ta: [பள்ளி, கல்லூரி, பல்கலைக்கழகம், தேர்வு, மாணவர், கல்வி, வேலைவாய்ப்பு, பணி நியமனம், நீட்]
+  sports:
+    label_en: Sports
+    label_ta: விளையாட்டு
+    description_en: Sports competitions, teams, players, matches, tournaments and sporting organizations
+    description_ta: விளையாட்டுப் போட்டிகள், அணிகள், வீரர்கள், ஆட்டங்கள், தொடர்கள் மற்றும் விளையாட்டு அமைப்புகள்
+    keywords:
+      en: [cricket, IPL, football, tennis, Olympics, tournament, match, team, player, championship]
+      ta: [கிரிக்கெட், ஐபிஎல், கால்பந்து, டென்னிஸ், ஒலிம்பிக், போட்டி, அணி, வீரர், சாம்பியன்ஷிப், விளையாட்டு]
+  technology_and_telecom:
+    label_en: Technology and telecom
+    label_ta: தொழில்நுட்பம் மற்றும் தொலைத்தொடர்பு
+    description_en: Computing, artificial intelligence, software, cybersecurity, smartphones, internet and telecommunications
+    description_ta: கணினி, செயற்கை நுண்ணறிவு, மென்பொருள், இணையப் பாதுகாப்பு, திறன்பேசிகள், இணையம் மற்றும் தொலைத்தொடர்பு
+    keywords:
+      en: [technology, artificial intelligence, software, cyber, smartphone, telecom, internet, data breach, digital]
+      ta: [தொழில்நுட்பம், செயற்கை நுண்ணறிவு, மென்பொருள், சைபர், ஸ்மார்ட்போன், தொலைத்தொடர்பு, இணையம், டிஜிட்டல்]
+  other_current_affairs:
+    label_en: Other
+    label_ta: பிற செய்திகள்
+    keywords:
+      en: []
+      ta: []

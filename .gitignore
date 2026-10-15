@@ -7,6 +7,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# celery logs
+celerybeat-schedule.bak
+celerybeat-schedule.dat
+celerybeat-schedule.dir
 # Python
 __pycache__/
 *.py[cod]
@@ -48,5 +52,10 @@ data_preprocess/
 logs/
 *.log
 
+# Human-label templates are source files; generated evaluation CSVs stay local.
+!src/backend/evaluation/annotations/event_pairs.csv
+!src/backend/evaluation/annotations/summaries.csv
+
 # Docker
 .docker/
+rss_daemon.pid
