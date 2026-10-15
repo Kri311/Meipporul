@@ -1,6 +1,6 @@
-# Veritas Lens
+# Meiporul — Eye of Truth
 
-Veritas Lens is an English and Tamil news aggregation project. It fetches RSS
+Meiporul (Eye of Truth) is an English and Tamil news aggregation project. It fetches RSS
 items, extracts and cleans publisher articles, enriches each article with NER
 and multilingual semantic embeddings, clusters related coverage into events,
 assigns topics, stores bilingual bullet summaries, and serves event pages with

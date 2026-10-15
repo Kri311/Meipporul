@@ -63,7 +63,10 @@ export default function Header({ lang = 'en', activePage = 'home', selectedTag =
             lineHeight: 1,
           }}
         >
-          VERITASIUM
+          <span style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+            <span>MEIPORUL</span>
+            <span style={{ fontSize: '0.52rem', fontWeight: 700, letterSpacing: '0.12em' }}>EYE OF TRUTH</span>
+          </span>
         </Link>
 
         <div
