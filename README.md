@@ -1,251 +1,240 @@
 # Veritas Lens
 
-Veritas Lens collects RSS news from the English and Tamil outlets in
-src/backend/config/sources.yaml, extracts article pages, groups related
-coverage into event timelines, and serves those events through a FastAPI API and
-a Next.js interface.
+Veritas Lens is an English and Tamil news aggregation project. It fetches RSS
+items, extracts and cleans publisher articles, enriches each article with NER
+and multilingual semantic embeddings, clusters related coverage into events,
+assigns topics, stores bilingual bullet summaries, and serves event pages with
+FastAPI and Next.js.
 
-## Article data contract
+The current operational pipeline is driven by the scripts in `scripts/` and
+`src/backend/scripts/shell/`. The root `REPORT.md` explains the implementation
+in more detail. An updated, reproducible workflow diagram is available as
+[`flow_chart/veritas_lens_workflow_updated.png`](flow_chart/veritas_lens_workflow_updated.png)
+with editable source at
+[`flow_chart/build_veritas_lens_diagram_updated.py`](flow_chart/build_veritas_lens_diagram_updated.py).
 
-The live daemon's final export is
-src/backend/data/trafiltura_preprocessed.csv. It contains dated canonical
-articles and the requested fields through `topic`, plus `image_url` for the
-news-feed cards:
+## Pipeline overview
 
-content_hash, guid, outlet_slug, title, description, author, published_at, language, article_length, data_fetch_via, canonical_url, extraction_method, extraction_quality, processing_status, raw_text, clean_text, topic, image_url
+```text
+RSS feeds → article extraction → cleaning/normalization → PostgreSQL
+    → bilingual NER → multilingual E5 embeddings → DBSCAN event clustering
+    → topic classification → persisted article summaries → event bullet merge
+    → CSV/event exports → FastAPI → Next.js
+```
 
-- title is the standalone, markup-free headline.
-- description remains the RSS/page description; it is not folded into the body.
-- raw_text preserves Trafilatura's extracted page text.
-- clean_text is valid JSON with one key/value: {"headline":"article body"}.
-  JSON serialization safely escapes quotes and newlines. Read it as JSON; do
-  not split on quotes or concatenate JSON manually.
-- The body is title-deduplicated, boilerplate-cleaned, and kept complete rather
-  than cut off with an ellipsis. Tamil rows are kept in Tamil script and common
-  political abbreviations are normalized in Tamil. Dateline locations are
-  stored in named_entities under LOCATION.
-- These exported values are taken from PostgreSQL; the pipeline writes the
-  canonical body/title back to PostgreSQL before exporting. `topic` comes from
-  the associated event cluster. PostgreSQL also keeps NER and embedding fields
-  for downstream processing; they are intentionally not part of this CSV view.
+PostgreSQL is the live source of truth. `src/backend/data/trafiltura_preprocessed.csv`
+is the canonical cleaned/enriched article export. `raw_processed.csv` is an
+ingestion/staging export; downstream semantic processing uses the database
+records and exports its results back to the canonical CSV.
 
-The historical reprocessor reads raw_processed.csv, fetches eligible 2026
-canonical URLs in batches, skips unavailable/invalid articles and atomically
-replaces the output only after successful completion. --batch-size is a
-checkpoint interval, not a maximum row count. Live ingestion accepts dated RSS
-items up to seven days old by default (`RSS_MAX_AGE_DAYS`, interpreted in
-India time); older articles already in PostgreSQL remain available in the
-archive.
+The application/pipeline schema initializer adds JSON `summary` columns to
+existing article and event tables and removes the retired
+`articles.semantic_text_hash` column before current ORM workflows run.
 
-## Architecture
-
-- RSS collection and Trafilatura extraction: src/backend/ingestion/ and
-  src/backend/scripts/fetch_rss_standalone.py.
-- Shared cleanup and JSON parsing: src/backend/ingestion/tasks/text_cleaning.py.
-- Historical export: src/backend/scripts/reprocess_articles.py.
-- Local cleanup without another fetch: src/backend/scripts/clean_processed_export.py.
-- NER: src/backend/ner_pipeline/zero_shot/nlp_pipeline.py.
-- Cross-lingual semantic embeddings: src/backend/semantic_processing/embedding_service.py
-  (defaults to intfloat/multilingual-e5-base, 768 dimensions to match pgvector).
-- Event grouping uses multilingual semantic similarity, a conservative
-  entity tie-break, a configurable date-gap boundary (14 days by default), and
-  reused event centroids; topics are
-  classified after clustering in src/backend/semantic_processing/.
-- Bilingual event summaries: event cards use a fast extractive preview; opening
-  an event generates a hierarchical abstractive summary from all article bodies
-  using csebuetnlp/mT5_multilingual_XLSum, with Tamil and English kept separate.
-  The model is lazy-loaded, uses CUDA FP16 when available, and falls back to CPU
-  or sentence extraction if inference cannot run. See src/backend/summarization/.
-- API: src/backend/api.py; UI: src/frontend/.
-
-Sentence Transformers provide embeddings, not translations. The app therefore
-filters event coverage into native English and Tamil lanes and summarizes only
-articles written in the selected language. Translation of complete articles is
-not part of this pipeline.
-
-## Run the historical data refresh
+## Install and configure
 
 From the repository root:
 
 ```bash
-source venv/bin/activate
-PYTHONPATH=./src python3 src/backend/scripts/reprocess_articles.py
-```
-
-The background wrapper writes progress to logs/reprocess_daemon.log:
-
-```bash
-bash src/backend/scripts/shell/start_reprocess_daemon.sh
-tail -f logs/reprocess_daemon.log
-```
-
-The real-time RSS daemon is separate:
-
-```bash
-bash src/backend/scripts/shell/start_daemon.sh
-tail -f logs/rss_daemon.log
-bash src/backend/scripts/shell/stop_daemon.sh
-```
-
-## Backfill images for previously collected articles
-
-Start PostgreSQL first, then fill missing 2026 `image_url` values from RSS/page
-metadata and article HTML. The script updates matching database rows and
-atomically rewrites only the image column in the processed CSV:
-
-```bash
-sudo pg_ctlcluster 16 main start
-source venv/bin/activate
-PYTHONPATH=./src python src/backend/scripts/backfill_images.py
-```
-
-The backfill can take a while because it contacts each publisher page. It is
-safe to rerun; rows that already have images are skipped.
-
-## Run services
-
-Start the API from the repository root:
-
-```bash
-source venv/bin/activate
-PYTHONPATH=./src uvicorn backend.api:app --host 127.0.0.1 --port 8000
-```
-
-Ensure PostgreSQL is running before starting the API or daemon.
-
-Start the web application in a second terminal:
-
-```bash
-cd src/frontend
-bun run dev
-```
-
-The API exposes GET /events/?lang=en|ta, GET /events/{id}?lang=en|ta,
-and /metadata. Configure the frontend API origin with the environment
-settings in src/frontend/src/lib/api.js.
-
-## NER annotation, training, and event clustering evaluation
-
-Run commands from the repository root. Install the declared Python
-dependencies first (Matplotlib is used for the PNG plots):
-
-```bash
+python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-PYTHONPATH=./src python3 src/backend/ner_pipeline/finetune/auto_annotate.py
-# Review/correct dataset/train.jsonl and dataset/val.jsonl before training.
-PYTHONPATH=./src python3 src/backend/ner_pipeline/finetune/train.py
+cp .env.example .env
 ```
 
-NER training writes overall and Tamil/English validation metrics, per-entity
-CSV files, and training/language plots under
-`src/backend/ner_pipeline/finetune/data/`. Its current train/validation tags
-are automatically generated weak labels, so treat the scores as diagnostics,
-not as human-gold model quality. Review and correct annotations before using
-the scores for a final performance claim.
+Set the PostgreSQL credentials and database URL in `.env` to match your local
+database. The RSS and model scripts load `.env` when run through the project
+scripts. Start PostgreSQL before running ingestion, enrichment, or the API.
+GPU use depends on installing a PyTorch build compatible with your CUDA driver;
+the scripts can fall back to CPU when model code supports it.
 
-The annotator uses bundled Tamil/English corpora, gazetteers and optional model
-output; it does not label live database articles. For rule/gazetteer-only weak
-labels, pass `--no-model`. Human review is needed before treating labels as
-gold.
-
-To rerun runtime NER over the database, then refresh embeddings and event
-assignments:
+## Run the complete one-shot pipeline
 
 ```bash
-PYTHONPATH=./src python3 src/backend/ner_pipeline/zero_shot/nlp_pipeline.py
-PYTHONPATH=./src python3 src/backend/semantic_processing/embedding_service.py
-PYTHONPATH=./src python3 src/backend/semantic_processing/clustering_service.py
-PYTHONPATH=./src python3 src/backend/semantic_processing/topic_modeling.py
-PYTHONPATH=./src python3 src/backend/export/csv_export.py
+./scripts/run_pipeline.sh
 ```
 
-The direct clustering command reruns DBSCAN over all stored embeddings even if
-no new embedding was generated. Tune precision with `DBSCAN_EPS` and
-`CLUSTER_MIN_PAIRWISE_SIMILARITY`; defaults are 0.11 and 0.88. Smaller
-`DBSCAN_EPS` and larger pairwise similarity thresholds produce smaller,
-stricter event groups.
+This runs RSS fetch → normalization/export → NER → E5 embeddings and DBSCAN →
+topic assignment → article/event summary persistence → event and CSV exports.
+For a small fetch smoke pass, use `./scripts/run_pipeline.sh --limit 20`.
+`--train-ner` is an explicit, longer training path and should only be used
+after reviewing the NER labels; it is not needed for ordinary daily refreshes.
 
-For clustering evaluation, manually label article pairs in
-`src/backend/evaluation/annotations/event_pairs.csv` with columns
-`guid_a,guid_b,same_event` (canonical URLs are accepted in the first two
-columns). Include both same-event and different-event pairs, then run:
+To run the recurring RSS and enrichment daemon:
 
 ```bash
-PYTHONPATH=./src python3 src/backend/evaluation/evaluate_event_clustering.py
+./scripts/start_daemon.sh
 ```
 
-The evaluator compares labels with current database `cluster_id` values and
-writes CSV, JSON, and PNG metrics to `src/backend/evaluation/results/`. Pair
-labels should be human-reviewed; this evaluates clustering but does not train
-it.
-
-The NER trainer defaults to micro-batches of 1 with gradient accumulation,
-gradient checkpointing, and Adafactor to fit a 5.6GB GPU. This lowers peak
-memory at the cost of slower training.
-
-The first event-detail request downloads the summarization checkpoint from
-Hugging Face (about 2.3GB); allow network access and disk space for the cache.
-It loads lazily, not during API startup. Device selection defaults to `auto`
-(CUDA FP16 when available, CPU fallback on memory pressure). To force GPU rendering for
-the API process (when available), start it with `SUMMARY_DEVICE=cuda`.
-
-Event clustering uses pretrained embeddings and has no trainable fine-tuning
-step. Event summaries are generated automatically with the pretrained bilingual
-abstractive summarizer. To evaluate them, first add human-reviewed labels
-to `src/backend/evaluation/annotations/event_pairs.csv` and
-`src/backend/evaluation/annotations/summaries.csv` (the expected columns and
-metric definitions are in `src/backend/evaluation/README.md`), then run:
+The daemon interval defaults to five minutes and can be changed with
+`PIPELINE_INTERVAL_MINUTES`. It holds an instance lock so a second loop cannot
+run concurrently. To keep only local services in development, use separate
+terminals:
 
 ```bash
-PYTHONPATH=./src python3 src/backend/evaluation/evaluate_event_clustering.py
-PYTHONPATH=./src python3 src/backend/evaluation/evaluate_summarization.py
+./scripts/start_backend.sh
+./scripts/start_frontend.sh
 ```
 
-The clustering evaluator compares same-event pairs with current cluster IDs;
-the summarization evaluator compares each language's generated summary with
-human references using ROUGE-1/2/L F1 and chrF. Human references are optional
-evaluation data only; the app generates summaries automatically. These
-evaluators require PostgreSQL to be
-running and populated. CSV, JSON, and PNG results are written to
-`src/backend/evaluation/results/`. Empty templates intentionally produce no
-scores: meaningful event and summary metrics require gold labels/references.
+The frontend refreshes event data while the page is open; the current client
+poll interval is 60 seconds. A user who returns to an event page sees persisted
+event data immediately, while a full new RSS/analysis cycle is controlled by
+the daemon schedule.
 
-## Start the RSS daemon once
+## Models and stages
 
-From the repository root, start it once with:
+### RSS ingestion and cleaning
+
+Feed definitions live in `src/backend/config/sources.yaml`. The fetcher
+deduplicates items, applies publication freshness rules, extracts publisher
+pages with Trafilatura when possible, and falls back to RSS content when page
+extraction is unavailable. Shared cleanup in
+`src/backend/ingestion/tasks/text_cleaning.py` removes markup, duplicate
+headlines, outlet-specific/editor boilerplate, and malformed fragments;
+language, body, title, and dateline metadata are normalized before persistence.
+Outlet-specific rules also block known Livemint byline/editor blocks.
+
+The exporter rebuilds `trafiltura_preprocessed.csv` from PostgreSQL. Its
+current fields include source identity and provenance, title/description,
+publication time, language, clean and raw text, topic metadata, NER JSON,
+image URL, direct `cluster_id`, the `embedding` vector serialized as JSON,
+one source-language `summary` bullet-list column, and English/Tamil
+compatibility summary columns. Linked entities remain in PostgreSQL for
+pipeline use.
+
+### NER
+
+Runtime inference in `src/backend/ner_pipeline/zero_shot/nlp_pipeline.py`
+prefers the local fine-tuned MuRIL checkpoint when it exists and the
+configuration enables it; Babelscape multilingual NER is the fallback. The
+pipeline adds normalization, gazetteer aliases, and Tamil morphology handling
+without restricting NER to a closed list of names. Extracted and linked
+entities are stored on article rows and are reused by clustering and topic
+classification.
+
+The NER training tools are under `src/backend/ner_pipeline/finetune/` and
+`scripts/`. Automatically generated weak labels are not gold labels; manually
+reviewed validation data is needed before claiming model-quality metrics.
+
+### Embeddings and event clustering
+
+`intfloat/multilingual-e5-base` produces normalized 768-dimensional vectors
+from headline-weighted article representations. The embedding service records
+the model and timestamp; text normalization clears stale vectors and model
+changes trigger re-embedding.
+
+Event clustering uses cosine-distance DBSCAN over the multilingual E5 space,
+so English and Tamil coverage can join the same event. Publication-date guards
+prevent stale merges. Typed NER overlap (person, organization, event, date,
+and location) can only provide a bounded boost when E5 similarity is already
+meaningful. A deterministic complete-link
+refinement splits DBSCAN's transitive chains unless every cross-pair stays
+within the configured distance threshold. Articles left as noise remain
+individual stories rather than being forced into an unrelated event.
+
+Relevant settings include `EMBEDDING_MODEL_NAME`, `EMBEDDING_DEVICE`,
+`DBSCAN_EPS`, `DBSCAN_MIN_SAMPLES`, and `CLUSTER_MAX_GAP_DAYS` in `.env`.
+
+### Topic classification
+
+The bilingual topic classifier supports E5 embeddings plus Logistic
+Regression, E5+typed-NER feature fusion, and a fine-tuned MuRIL experiment.
+`selected.json` determines the supervised runtime model. Fusion is selected
+only if its cross-validation improvement passes the configured gain threshold;
+multilingual zero-shot and keyword/rule classification provide fallbacks.
+Low-confidence or ambiguous supervised predictions map to the `Other`
+taxonomy topic. `topic_modeling.py` classifies articles and assigns each event
+the majority member topic, using `Other` for ties.
+
+Prepare a 500-row bilingual topic annotation template (250 per language):
 
 ```bash
-bash src/backend/scripts/shell/start_daemon.sh
-tail -f logs/rss_daemon.log
+./scripts/prepare_topic_labels.sh \
+  --input src/backend/data/trafiltura_preprocessed.csv \
+  --output src/backend/data/topic_labels_500_to_annotate.csv \
+  --per-language 250
 ```
 
-The start lock prevents duplicate launches and the pipeline-instance lock
-prevents a second pipeline loop. Output is appended to `rss_daemon.log` once
-(the pipeline no longer tees a second copy into the same log). Stop it with:
+Review the `suggested_topic` values into `topic`, then compare E5-only with
+E5+NER and save the selected model and evaluation output:
 
 ```bash
-bash src/backend/scripts/shell/stop_daemon.sh
+./scripts/train_topic_classifier.sh src/backend/data/topic_labels_500_to_annotate.csv
 ```
 
-## Data and operational layout
+The trained artifacts and metrics are written under
+`src/backend/models/topic_classifier/`. The quality of the model depends on
+reviewed labels; suggested labels are weak supervision until corrected.
 
-- Durable code and configuration live under src/backend and src/frontend.
-- Supported operational scripts live in src/backend/scripts/ and
-  src/backend/scripts/shell/. Prior one-off patchers and manual smoke checks
-  are preserved under src/backend/scripts/archive/ and
-  src/backend/tests/manual/ rather than cluttering the project root.
-- Historical reprocessing artifact (when that separate tool is used):
-  src/backend/data/trafiltura_processed.csv.
-- RSS source/staging export: src/backend/data/raw_processed.csv.
-- Live enriched export: src/backend/data/trafiltura_preprocessed.csv, refreshed
-  by the full daemon after ingestion and NER/semantic processing. RSS or page
-  Open Graph/Twitter metadata supplies `image_url` where available.
-- Daemon and pipeline logs: repository-root logs/.
-- Reprocessing uses a sibling .tmp file as a safety checkpoint; the .csv
-  appears/replaces only after successful completion.
+### Summarisation
 
-See the extraction/runbook notes in src/backend/docs/ARTICLE_REPROCESSING.md
-for recovery and validation details. Older research and implementation
-journals in src/backend/docs/ are historical; this README and the runbook
-describe the current intended contract.
+`src/backend/summarization/common.py` uses a fine-tuned local LoRA adapter when
+available; otherwise it uses `csebuetnlp/mT5_multilingual_XLSum`. It processes
+English and Tamil separately, chunks long bodies, checks generated points
+against source text, and falls back to extractive source sentences when model
+loading, language validation, or grounding fails.
+
+`persist_summaries.py` generates and stores each article's bullets only when
+its content or configured model identifier changes. Event bullets are a deterministic, de-duplicated
+merge of stored summaries from member articles, so opening an event does not
+trigger fresh model generation. Summary JSON and hashes are stored in
+PostgreSQL, and bullet columns are included in the canonical CSV export.
+
+Prepare a bilingual human-reviewed summary dataset:
+
+```bash
+./scripts/prepare_summary_labels.sh --per-language 250
+```
+
+Fill `summary_bullets` with factual English or Tamil bullet points, and use a
+shared `event_group` for related articles. Then fine-tune the mT5 base model:
+
+```bash
+./scripts/train_summarizer.sh src/backend/data/summary_labels_to_annotate.csv --epochs 3
+```
+
+At least 20 reviewed examples per language and independent train/validation
+groups are required by the trainer. Fine-tuning is an offline step; normal
+pipeline runs do not train models.
+
+To rebuild model-derived values for existing database articles after a model
+or schema change, run the explicit full refresh once:
+
+```bash
+./scripts/run_pipeline.sh --refresh-existing
+```
+
+It reruns NER for every cleaned article, recomputes all E5 embeddings,
+reclassifies topics, forces article and event summary regeneration, updates
+event `cluster_id` assignments, and exports the resulting database state.
+Ordinary runs remain incremental for NER, embeddings, and summaries while
+reclustering the stored vector corpus.
+
+## Evaluation
+
+Evaluation scripts and annotation templates are under
+`src/backend/evaluation/`. Event clustering requires reviewed article pairs
+(`guid_a,guid_b,same_event`). Summarisation requires human reference bullets
+for each language. NER scores require a reviewed gold BIO dataset. The
+evaluators report metrics only when an answer key exists; auto-annotated data
+must be identified as weak supervision, not gold.
+
+See [`src/backend/evaluation/README.md`](src/backend/evaluation/README.md) for
+the current annotation formats and metrics.
+
+## Main implementation map
+
+| Stage | Implementation |
+|---|---|
+| Feed configuration | `src/backend/config/sources.yaml` |
+| RSS fetch and page extraction | `src/backend/scripts/fetch_rss_standalone.py` |
+| Cleaning/normalization | `src/backend/ingestion/tasks/text_cleaning.py` |
+| PostgreSQL schema | `src/backend/models/database.py` |
+| NER and entity linking | `src/backend/ner_pipeline/zero_shot/` |
+| Embeddings and DBSCAN | `src/backend/semantic_processing/` |
+| Topic model and runtime selection | `src/backend/semantic_processing/topic_classifier.py`, `topic_modeling.py` |
+| Summary inference and persistence | `src/backend/summarization/` |
+| Enriched CSV/event export | `src/backend/export/csv_export.py`, `generate_events.py` |
+| Backend API | `src/backend/api.py` |
+| Frontend | `src/frontend/` |
+| End-to-end scripts | `scripts/`, `src/backend/scripts/shell/` |
